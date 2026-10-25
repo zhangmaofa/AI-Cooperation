@@ -136,6 +136,7 @@ export class Relay {
       command: executor.command,
       model: executor.model,
       cwd: executor.cwd,
+      args: executor.args,
     };
     this.adapterFactory(config); // Validate before writing a task.
     const task = {
@@ -168,6 +169,15 @@ export class Relay {
         goal: task.goal,
         plan: task.plan,
         acceptance: task.acceptance,
+        round: task.rounds + 1,
+        contract: task.contract
+          ? {
+              allowedPaths: task.contract.allowedPaths,
+              verification: task.contract.verification,
+              constraints:
+                "Do not change the task contract or authorize yourself. Use only the assigned workspace.",
+            }
+          : undefined,
         instruction:
           "Execute the assigned plan. Report actual changed files/artifacts and verification evidence. Ask the coordinator when task information is missing. Only the coordinator can accept the result. Do not expand the authorized scope.",
         feedback:

@@ -1521,3 +1521,78 @@ footer .dot {
     max-width: 330px;
   }
 }
+/* Collaboration workflow surfaces share the existing desktop visual language. */
+.advanced-contract {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid #e0e5e1;
+  border-radius: 10px;
+}
+.advanced-contract summary,
+.verification-report summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.advanced-contract label,
+.workflow-draft label {
+  margin-top: 12px;
+}
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.workflow-node {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  margin: 12px 0;
+  border: 1px solid #e0e5e1;
+  border-radius: 10px;
+  background: #fafcfb;
+  color: #263b32;
+}
+.workflow-node p {
+  margin: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.workflow-node small {
+  color: #66776f;
+}
+.collaboration-tools {
+  margin: 18px 0;
+}
+.collaboration-tools .button-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.verification-report {
+  margin: 14px 0;
+  padding: 12px;
+  background: #f6f8f7;
+  border-radius: 8px;
+}
+.verification-report ul {
+  max-height: 170px;
+  overflow: auto;
+  font-size: 12px;
+}
+.check-pass {
+  color: #227754;
+}
+.check-fail {
+  color: #b74139;
+}
+.badge.queued {
+  background: #edf1f7;
+  color: #526478;
+}
+.badge.stalled,
+.badge.cancel_requested {
+  background: #fff1dd;
+  color: #926028;
+}

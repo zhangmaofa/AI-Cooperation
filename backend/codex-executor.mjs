@@ -45,10 +45,11 @@ export class CodexExecutor {
       text: "",
       turnId: null,
       createdAt: new Date().toISOString(),
+      connectionId: this.client.connection?.id || request.connectionId,
     };
     this.store.saveExecution(run); // Save the execution thread before starting model work.
     const prompt = `你是 AI-Cooperation 的执行 Agent。按照所给任务、计划和反馈执行。工作区由宿主指定，所有修改限定在该工作区内。不得扩大权限、绕过沙箱或自行接受任务验收。汇报真实修改与验证结果；信息不足时提出具体疑问。最终答复只返回 JSON：{"status":"completed 或 needs_input","summary":"真实结果与证据","question":"有疑问时填写"}。completed 只表示本轮执行结束，仍须主调审核。以下是任务或主调的补充数据：\n${request.text}`;
-    const finish = (state, value) => {
+    const finish = (state, value, usage) => {
       if (this.isClosed()) return;
       const latest = this.store.execution(id);
       this.store.saveExecution({
@@ -56,6 +57,7 @@ export class CodexExecutor {
         state,
         text: value,
         finishedAt: new Date().toISOString(),
+        usage,
       });
       this.notify();
     };
@@ -68,6 +70,17 @@ export class CodexExecutor {
         },
       })
       .then((response) => {
+        if (response.needsUser) {
+          finish(
+            "auth-required",
+            "目标 Agent 请求权限。协调器未自动批准，请在原软件核对权限与配置。",
+          );
+          return;
+        }
+        if (response.cancelled) {
+          finish("canceled", "目标 Agent 已确认本轮取消");
+          return;
+        }
         let report;
         try {
           report = parseModelJSON(response.text);
@@ -87,6 +100,7 @@ export class CodexExecutor {
               ? report.summary
               : response.text ||
                   "Codex 本轮执行结束，但没有返回报告。请主调检查实际产物。",
+            response.usage,
           );
       })
       .catch((error) => {
@@ -97,5 +111,38 @@ export class CodexExecutor {
   }
   async poll(id) {
     return this.result(this.store.execution(id));
+  }
+  async recover(id) {
+    const run = this.store.execution(id);
+    if (!run.turnId) throw new Error("原回合 ID 尚未确认，不能自动恢复或重发");
+    const remote = await this.client.readTurn(run.contextId, run.turnId);
+    if (remote.status === "interrupted") {
+      this.store.saveExecution({
+        ...run,
+        state: "canceled",
+        text: "原执行回合已确认中断",
+      });
+      return this.result(this.store.execution(id));
+    }
+    if (remote.status !== "completed")
+      throw new Error(`原执行轮次仍为 ${remote.status}，请保留会话并稍后核对`);
+    let report;
+    try {
+      report = parseModelJSON(remote.text);
+    } catch {}
+    this.store.saveExecution({
+      ...run,
+      state: report?.status === "needs_input" ? "input-required" : "completed",
+      text: report?.question || report?.summary || remote.text,
+      recoveredAt: new Date().toISOString(),
+    });
+    return this.result(this.store.execution(id));
+  }
+  async cancel(id) {
+    const run = this.store.execution(id);
+    if (!run.turnId) throw new Error("尚未取得回合 ID，请先核对远端");
+    await this.client.interrupt(run.contextId, run.turnId);
+    // Interrupt acknowledgement is not a terminal fact. Recovery must confirm the outcome.
+    return { requested: true };
   }
 }

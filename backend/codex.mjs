@@ -43,7 +43,7 @@ export class CodexClient {
         clientInfo: {
           name: "ai_cooperation",
           title: "AI-Cooperation",
-          version: "0.2.1",
+          version: "0.3.0",
         },
       });
       this.send({ method: "initialized", params: {} });
@@ -99,6 +99,13 @@ export class CodexClient {
     const params = message.params || {};
     const turn = this.turns.get(params.threadId);
     if (!turn) return;
+    if (message.method === "thread/tokenUsage/updated")
+      turn.usage = params.tokenUsage?.last;
+    if (message.method === "item/started")
+      turn.onProgress?.({
+        type: params.item?.type,
+        at: new Date().toISOString(),
+      });
     if (
       message.method === "item/completed" &&
       params.item?.type === "agentMessage"
@@ -108,7 +115,11 @@ export class CodexClient {
       this.turns.delete(params.threadId);
       clearTimeout(turn.timer);
       params.turn?.status === "completed"
-        ? turn.resolve({ text: turn.text, threadId: params.threadId })
+        ? turn.resolve({
+            text: turn.text,
+            threadId: params.threadId,
+            usage: turn.usage,
+          })
         : turn.reject(
             new Error(`Codex 回合未完成：${params.turn?.status || "unknown"}`),
           );
@@ -142,11 +153,20 @@ export class CodexClient {
     else threadId = (await this.request("thread/start", params)).thread.id;
     return threadId;
   }
-  async run(
+  run(...args) {
+    // One controller never starts competing decisions, even across child tasks.
+    const result = (this.queue || Promise.resolve()).then(() =>
+      this.runTurn(...args),
+    );
+    this.queue = result.catch(() => {});
+    return result;
+  }
+  async runTurn(
     prompt,
     threadId,
     {
       onStarted,
+      onProgress,
       threadPrepared = false,
       timeoutMs = this.role === "executor" ? 900000 : 180000,
     } = {},
@@ -158,7 +178,14 @@ export class CodexClient {
     if (this.turns.has(threadId))
       throw new Error("该 Codex 会话正在工作，请等待本回合结束");
     const result = new Promise((resolve, reject) => {
-      const turn = { text: "", resolve, reject, timer: null, turnId: null };
+      const turn = {
+        text: "",
+        resolve,
+        reject,
+        timer: null,
+        turnId: null,
+        onProgress,
+      };
       turn.timer = setTimeout(() => {
         this.turns.delete(threadId);
         if (turn.turnId)
@@ -190,6 +217,26 @@ export class CodexClient {
       throw error;
     }
     return result;
+  }
+  async readTurn(threadId, turnId) {
+    await this.start();
+    const result = await this.request("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+    const turn = result.thread?.turns?.find((t) => t.id === turnId);
+    if (!turn) throw new Error("原执行轮次暂不可读取，保留待核对状态");
+    return {
+      status: turn.status,
+      text: (turn.items || [])
+        .filter((i) => i.type === "agentMessage")
+        .map((i) => i.text || "")
+        .join("\n"),
+    };
+  }
+  async interrupt(threadId, turnId) {
+    await this.start();
+    return this.request("turn/interrupt", { threadId, turnId });
   }
   fail(error) {
     for (const pending of this.pending.values()) {

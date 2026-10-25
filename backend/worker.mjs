@@ -1,10 +1,14 @@
 import { DesktopService } from "./service.mjs";
+import { startBridge } from "./bridge.mjs";
 const pending = new Map();
+const send = (message) => {
+  if (process.connected) process.send(message);
+};
 let secretId = 0;
 const service = new DesktopService({
   root: process.env.AICO_DATA_DIR,
   codexCommand: process.env.AICO_CODEX_COMMAND || "codex.exe",
-  notify: (snapshot) => process.send?.({ type: "snapshot", snapshot }),
+  notify: (snapshot) => send({ type: "snapshot", snapshot }),
   secret: (ref) =>
     new Promise((resolve, reject) => {
       if (!ref) return resolve("");
@@ -14,8 +18,23 @@ const service = new DesktopService({
         reject(new Error("凭据读取超时"));
       }, 5000);
       pending.set(id, { resolve, reject, timer });
-      process.send?.({ type: "secret", id, ref });
+      send({ type: "secret", id, ref });
     }),
+});
+function saveSecret(value) {
+  return new Promise((resolve, reject) => {
+    const id = ++secretId;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error("加密保存超时"));
+    }, 5000);
+    pending.set(id, { resolve, reject, timer });
+    send({ type: "save-secret", id, value });
+  });
+}
+const bridge = await startBridge(service, {
+  root: process.env.AICO_DATA_DIR,
+  saveSecret,
 });
 process.on("message", async (message) => {
   if (message.type === "secret-result") {
@@ -30,13 +49,18 @@ process.on("message", async (message) => {
   }
   if (message.type === "request") {
     try {
-      process.send?.({
+      send({
         type: "response",
         id: message.id,
-        result: await service.handle(message.method, message.data),
+        result:
+          message.method === "pairing.start"
+            ? bridge.startPairing()
+            : message.method === "pairing.status"
+              ? bridge.pairingStatus()
+              : await service.handle(message.method, message.data),
       });
     } catch (error) {
-      process.send?.({
+      send({
         type: "response",
         id: message.id,
         error: error.message,
@@ -57,6 +81,6 @@ const timer = setInterval(async () => {
 process.on("disconnect", () => {
   clearInterval(timer);
   service.close();
-  process.exit(0);
+  bridge.close().finally(() => process.exit(0));
 });
-process.send?.({ type: "ready", snapshot: service.snapshot() });
+send({ type: "ready", snapshot: service.snapshot() });

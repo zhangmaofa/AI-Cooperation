@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Connection, Evidence, Snapshot, Task } from "./types";
+import type { Connection, Contract, Evidence, Snapshot, Task } from "./types";
+import {
+  ContractFields,
+  defaultContract,
+  TaskTools,
+  WorkflowPage,
+  SchedulerSettings,
+  AimannaPairing,
+  McpIntegration,
+} from "./collaboration";
 import "./style.css";
 
 const api = window.cooperation;
@@ -17,6 +26,9 @@ const statusNames: Record<string, string> = {
   canceled: "已取消",
   budget_exhausted: "轮次已耗尽",
   delivery_unknown: "需核对远端",
+  queued: "排队中",
+  stalled: "无进展暂停",
+  cancel_requested: "已请求停止",
 };
 const eventNames: Record<string, string> = {
   created: "任务已创建",
@@ -32,6 +44,12 @@ const eventNames: Record<string, string> = {
   connection_error: "连接暂时不可用",
   coordinator_review: "Codex 正在审核",
   failed: "执行失败",
+  queued: "等待调度",
+  verified: "独立验证完成",
+  coordinator_answer: "原主控已答复",
+  question_escalated: "问题需要用户决定",
+  stalled: "返工无进展，已暂停",
+  integration_revision: "总体审核要求返工",
 };
 const time = (value: string) =>
   new Date(value).toLocaleString("zh-CN", {
@@ -139,7 +157,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.2.1",
+    version: "0.3.0",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -251,6 +269,14 @@ function App() {
             <span className="nav-count">{state.connections.length}</span>
           </button>
           <button
+            className={page === "workflows" ? "active" : ""}
+            onClick={() => setPage("workflows")}
+          >
+            <Icon name="nodes" />
+            协作计划
+            <span className="nav-count">{state.workflows?.length || 0}</span>
+          </button>
+          <button
             className={page === "settings" ? "active" : ""}
             onClick={() => setPage("settings")}
           >
@@ -286,7 +312,9 @@ function App() {
               ? "任务工作台"
               : page === "agents"
                 ? "Agent 连接"
-                : "设置与说明"}
+                : page === "workflows"
+                  ? "协作计划"
+                  : "设置与说明"}
           </span>
           <div>
             <span className="local-label">
@@ -512,6 +540,7 @@ function App() {
                   A2A 接收任务。连接测试不会自动派发任务。
                 </p>
               </div>
+              <AimannaPairing call={call} />
               <div className="agent-grid">
                 {state.connections.map((connection) => (
                   <AgentCard
@@ -530,12 +559,22 @@ function App() {
                 <div>
                   <h3>按能力接入，而非绑定某个软件</h3>
                   <p>
-                    当前支持 Codex app-server 与 A2A
-                    0.3。其他协议、界面自动化和更多软件适配正在规划中。
+                    当前支持 Codex app-server、A2A 0.3 与 ACP v1。兼容 ACP
+                    的软件可共用协议驱动；具体权限与会话恢复能力以连接测试为准。
                   </p>
                 </div>
               </section>
             </>
+          )}
+          {page === "workflows" && (
+            <WorkflowPage
+              state={state}
+              call={call}
+              openTask={(id) => {
+                setSelected(id);
+                setPage("tasks");
+              }}
+            />
           )}
           {page === "settings" && (
             <>
@@ -590,9 +629,13 @@ function App() {
                     保存 SQLite
                     任务历史；真实连接需要你已有的软件登录与对应权限。
                   </li>
-                  <li>桌面已有聊天接管、跨任务并发调度和远端取消暂未实现。</li>
+                  <li>
+                    支持子任务依赖、并发上限、工作区写入锁、主控答疑与独立验证。已有桌面聊天接管尚未实现。
+                  </li>
                 </ul>
               </section>
+              <SchedulerSettings state={state} call={call} />
+              <McpIntegration call={call} />
               <button className="danger-link" onClick={() => api.quit()}>
                 完全退出 AI-Cooperation
               </button>
@@ -788,6 +831,7 @@ function TaskDetail({
                 </div>
               ))}
             </div>
+            <TaskTools task={task} call={call} />
             {task.result?.text && (
               <>
                 <div className="subheading">
@@ -1098,6 +1142,7 @@ function NewTask({
     goal: string;
   } | null>(null);
   const [autoReview, setAutoReview] = useState(false);
+  const [contract, setContract] = useState<Contract>(defaultContract);
   const [maxRounds, setRounds] = useState(5);
   const [busy, setBusy] = useState(false);
   const lines = (value: string) =>
@@ -1127,7 +1172,16 @@ function NewTask({
       acceptance: lines(acceptance),
       mode,
       connectionId,
-      workspace: selectedExecutor?.kind === "codex" ? workspace : undefined,
+      workspace: workspace || undefined,
+      contract: {
+        ...contract,
+        autoAnswer: Boolean(
+          binding &&
+            binding.goal === goal &&
+            mode === "real" &&
+            contract.autoAnswer,
+        ),
+      },
       coordinatorId:
         binding?.goal === goal && mode === "real" ? coordinatorId : undefined,
       threadId:
@@ -1216,20 +1270,27 @@ function NewTask({
               >
                 <option value="">请选择执行 Agent</option>
                 {connections
-                  .filter((c) => c.kind === "a2a" || c.kind === "codex")
+                  .filter((c) => ["a2a", "codex", "acp"].includes(c.kind))
                   .map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} · {c.kind === "codex" ? "Codex" : "A2A"}
+                      {c.name} ·{" "}
+                      {c.kind === "codex"
+                        ? "Codex"
+                        : c.kind === "acp"
+                          ? "ACP"
+                          : "A2A"}
                     </option>
                   ))}
               </select>
             </label>
           </div>
         )}
-        {mode === "real" && selectedExecutor?.kind === "codex" && (
+        {mode === "real" && selectedExecutor && (
           <>
             <label>
-              执行工作目录
+              {selectedExecutor.kind === "a2a"
+                ? "本地产物目录（可选）"
+                : "执行工作目录"}
               <div className="input-action">
                 <input
                   aria-label="执行工作目录"
@@ -1249,8 +1310,11 @@ function NewTask({
               </div>
             </label>
             <p className="hint">
-              执行 Codex
-              使用工作区写入沙箱；主调仍只读。请选择工作目录后创建任务，不会把主调会话改成执行会话。
+              {selectedExecutor.kind === "codex"
+                ? "执行 Codex 使用工作区写入沙箱，主控只读，两者会话独立。"
+                : selectedExecutor.kind === "acp"
+                  ? "ACP 的实际文件权限由目标软件管理，请为本地执行器选择明确的工作目录。"
+                  : "该目录仅供协调器检查本地产物和防止任务冲突，不会更改 AIMana 内部的工作目录；请选择与远端实际配置对应的目录。"}
             </p>
           </>
         )}
@@ -1260,7 +1324,7 @@ function NewTask({
           </div>
         )}
         {mode === "real" &&
-          selectedExecutor?.kind === "codex" &&
+          selectedExecutor?.kind !== "a2a" &&
           !workspace.trim() && (
             <div className="warning">
               还不能开工：请选择执行工作目录，再创建任务。
@@ -1326,6 +1390,13 @@ function NewTask({
             </label>
           )}
         </div>
+        {mode === "real" && (
+          <ContractFields
+            value={contract}
+            change={setContract}
+            coordinator={Boolean(binding && binding.goal === goal)}
+          />
+        )}
       </div>
       <div className="modal-footer">
         <button className="secondary" disabled={busy} onClick={close}>
@@ -1401,10 +1472,12 @@ function AgentCard({
       <span className="small-label">
         {connection.kind === "codex"
           ? "主调 / 执行 · CODEX APP-SERVER"
-          : "执行 · A2A 0.3"}
+          : connection.kind === "acp"
+            ? "执行 · ACP v1"
+            : "执行 · A2A 0.3"}
       </span>
       <p className="connection-address">
-        {connection.kind === "codex" ? connection.command : connection.endpoint}
+        {connection.kind !== "a2a" ? connection.command : connection.endpoint}
       </p>
       <div className="agent-meta">
         <span>模型</span>
@@ -1463,7 +1536,11 @@ function ConnectionForm({
   call: Call;
   close: () => void;
 }) {
-  const [kind, setKind] = useState<"a2a" | "codex">(connection?.kind || "a2a");
+  const [kind, setKind] = useState<"a2a" | "codex" | "acp">(
+    connection?.kind || "a2a",
+  );
+  const [args, setArgs] = useState(JSON.stringify(connection?.args || []));
+  const [argsError, setArgsError] = useState(false);
   const [name, setName] = useState(connection?.name || "");
   const [endpoint, setEndpoint] = useState(connection?.endpoint || "");
   const [command, setCommand] = useState(connection?.command || "codex.exe");
@@ -1472,15 +1549,28 @@ function ConnectionForm({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   async function save() {
+    let parsedArgs: unknown = [];
+    try {
+      parsedArgs = JSON.parse(args);
+      if (
+        !Array.isArray(parsedArgs) ||
+        parsedArgs.some((v) => typeof v !== "string")
+      )
+        throw new Error();
+    } catch {
+      setArgsError(true);
+      return;
+    }
     setBusy(true);
     const result = await call("connection.save", {
       id: connection?.id,
       name,
       kind,
       endpoint: kind === "a2a" ? endpoint : undefined,
-      command: kind === "codex" ? command : undefined,
-      model: kind === "codex" ? model : undefined,
-      cwd: kind === "codex" ? cwd : undefined,
+      command: kind !== "a2a" ? command : undefined,
+      model: kind !== "a2a" ? model : undefined,
+      cwd: kind !== "a2a" ? cwd : undefined,
+      args: kind === "acp" ? parsedArgs : undefined,
       token: kind === "a2a" ? token : undefined,
     });
     setBusy(false);
@@ -1510,10 +1600,14 @@ function ConnectionForm({
             aria-label="连接类型"
             disabled={Boolean(connection)}
             value={kind}
-            onChange={(e) => setKind(e.target.value as "a2a" | "codex")}
+            onChange={(e) => {
+              setKind(e.target.value as "a2a" | "codex" | "acp");
+              if (e.target.value === "acp") setCommand("");
+            }}
           >
             <option value="a2a">A2A 0.3 · 执行 Agent</option>
             <option value="codex">Codex app-server · 主调或执行</option>
+            <option value="acp">ACP v1 · 通用执行 Agent</option>
           </select>
         </label>
         {kind === "a2a" ? (
@@ -1522,7 +1616,7 @@ function ConnectionForm({
               A2A 接口地址
               <input
                 aria-label="A2A 接口地址"
-                placeholder="http://127.0.0.1:43120/a2a/v0.3/agents/你的AgentID"
+                placeholder="http://127.0.0.1:43119/a2a/v0.3/agents/你的AgentID"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
               />
@@ -1533,7 +1627,7 @@ function ConnectionForm({
               /.well-known/agent-card.json。
             </p>
             <label>
-              访问 Token
+              Agent 连接凭据（A2A Token）
               <input
                 aria-label="访问 Token"
                 type="password"
@@ -1547,12 +1641,15 @@ function ConnectionForm({
                 onChange={(e) => setToken(e.target.value)}
               />
             </label>
-            <p className="hint">只保存在本机加密凭据文件中，不会回显。</p>
+            <p className="hint">
+              这是本地 Agent 连接凭据，与 AIMana 账号额度、模型 API key
+              无关。只保存在本机加密文件中。支持粘贴完整 Agent Card 地址。
+            </p>
           </>
         ) : (
           <>
             <label>
-              Codex 程序路径
+              {kind === "acp" ? "ACP 程序路径" : "Codex 程序路径"}
               <input
                 aria-label="Codex 程序路径"
                 value={command}
@@ -1560,6 +1657,26 @@ function ConnectionForm({
                 placeholder="codex.exe 或完整路径"
               />
             </label>
+            {kind === "acp" && (
+              <label>
+                启动参数（JSON 数组）
+                <input
+                  aria-label="ACP 启动参数"
+                  value={args}
+                  onChange={(e) => setArgs(e.target.value)}
+                  placeholder={'["--acp"]'}
+                />
+                <small>
+                  使用目标软件官方 ACP 启动参数；沿用该软件已有登录。ACP
+                  不提供统一沙箱，权限由目标软件管理。
+                </small>
+              </label>
+            )}
+            {argsError && (
+              <p role="alert" className="warning">
+                启动参数必须是字符串 JSON 数组，例如 ["--acp"]。
+              </p>
+            )}
             <label>
               模型（可选）
               <input

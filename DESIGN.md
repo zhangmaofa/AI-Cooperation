@@ -4,6 +4,12 @@
 
 ## 0. 桌面预览版 0.2 交付更新
 
+### 0.3.0 整合更新
+
+当前交付以 README 为准。新增持久消息记录与主控收件箱、普通问题自动答疑及用户升级处理、带依赖的多执行器协作计划、并发上限和父子工作目录写入锁、可选 Git worktree、独立验证及产物哈希、范围违规和无进展停止、可观测 token 预算、总体集成审核与原会话返工。主控决策串行化；计划与会话绑定持久保存。
+
+新增 ACP v1 通用执行驱动、AIMana++ 显式配对连接器，以及 `mcp.mjs --desktop` 共享后台模式。为 MCP 与配对按需使用固定 loopback 地址和随机端口，不注册 Windows Service。旧 JSON MCP 模式仍独立保留。下面 0.2 的实现缺口说明为历史记录，不能视为 0.3 全部仍未实现；真实 AIMana、更多厂商 ACP 兼容和已有桌面聊天接管仍未验收。
+
 0.2.1 补充 Codex 执行角色：同一 Codex 连接可以分别用于主调和执行，独立 thread，模型可按连接分别配置。主调只读，执行限定在明确选择的工作目录使用 workspace-write；审核与返工通过原绑定会话衔接。执行会话与轮次先持久化到 SQLite，再在后台等待结果。没有配置 AIMana/A2A 时也可以用本机 Codex 开工。
 
 本文下方保留总体设计与后续路线；当前状态以项目 README 为准。0.2 已实现 Electron/React/TypeScript 图形客户端、独立 Node 后台进程、SQLite/better-sqlite3/WAL、Windows 加密凭据、模拟演示、真实 A2A 连接与派发入口、Codex app-server 计划和只读审核入口、同上下文返工，以及托盘运行。当前未开放本地 HTTP 端口，不需要 Fastify。
@@ -30,15 +36,15 @@
 
 ## 2. 应用、适配器与实例
 
-| 概念 | 含义 | 示例 |
-| --- | --- | --- |
-| Provider / 软件提供方 | 提供 Agent 会话运行能力的软件或服务 | AIMana、Codex |
-| Adapter / 适配器 | 把外部协议转换成协调器内部协议的代码 | A2A03Adapter、CodexAppServerAdapter |
-| Connection / 连接 | 一个地址、运行环境和凭据引用 | 本机 AIMana 的一个 A2A 地址 |
-| Agent Instance / 实例 | 可被分配工作的具体 Agent 配置 | 指定软件、模型、项目和并发上限的执行实例 |
-| Session / 会话 | 一段持续上下文 | Codex threadId、AIMana A2A contextId |
-| Task / 业务任务 | 主目标或一个子任务及其验收契约 | 修复一项具体问题 |
-| Attempt / 执行轮次 | 该子任务的一次执行或返工 | 初次执行、审核失败后第二轮 |
+| 概念                  | 含义                                 | 示例                                     |
+| --------------------- | ------------------------------------ | ---------------------------------------- |
+| Provider / 软件提供方 | 提供 Agent 会话运行能力的软件或服务  | AIMana、Codex                            |
+| Adapter / 适配器      | 把外部协议转换成协调器内部协议的代码 | A2A03Adapter、CodexAppServerAdapter      |
+| Connection / 连接     | 一个地址、运行环境和凭据引用         | 本机 AIMana 的一个 A2A 地址              |
+| Agent Instance / 实例 | 可被分配工作的具体 Agent 配置        | 指定软件、模型、项目和并发上限的执行实例 |
+| Session / 会话        | 一段持续上下文                       | Codex threadId、AIMana A2A contextId     |
+| Task / 业务任务       | 主目标或一个子任务及其验收契约       | 修复一项具体问题                         |
+| Attempt / 执行轮次    | 该子任务的一次执行或返工             | 初次执行、审核失败后第二轮               |
 
 同一软件可以注册多个实例；多个软件如果支持兼容协议，可以共用适配器。每款软件并不必然需要独立代码。主调实例和执行实例可共用协议实现，授予的工具与角色权限不同。
 
@@ -46,20 +52,20 @@
 
 ## 3. 技术选型
 
-| 层 | 基线选型 | 用途与边界 |
-| --- | --- | --- |
-| 后端语言与运行时 | TypeScript + 独立 Node.js 24 进程 | 复用现有 JavaScript 原型、fetch、子进程和 MCP 集成；不依赖 Electron renderer 存活 |
-| 本地通信 | 应用内部 IPC；跨应用按需用 Fastify + JSON HTTP API + SSE | 普通用户后台进程，不注册 Windows Service；仅需要入站桥接时监听 loopback 并鉴权；调度内核不依赖 HTTP，按需增加 WebSocket |
-| 任务引擎 | 显式状态机 + SQLite 持久队列 | 管理依赖、并发、租约、疑问、审核、返工和恢复；状态变更与 outbox 事件在同一事务提交 |
-| 数据持久化 | SQLite + better-sqlite3 + WAL | 保存任务、会话映射、执行轮次、事件、审核和消息队列；单个后台服务负责写入；绑定并验证 Node 运行时与 native module 版本 |
-| 产物 | 本地文件目录 + 数据库引用与哈希 | 大文件和原始报告存文件，SQLite 只存索引、元数据和校验信息 |
-| 数据契约 | TypeScript 类型 + Zod + 协议版本 | 校验连接器输入、模型结构化输出和状态转换；运行时边界也校验，不能只依赖编译类型 |
-| 独立界面 | React + TypeScript + Vite，Electron 桌面壳 | 连接管理、任务树、进度、疑问、审核历史、暂停/取消；Electron 负责桌面窗口/托盘，不承载唯一后台调度进程 |
-| 主调集成 | Codex app-server（stdio） | 由协调器创建或明确绑定 thread，持续接收回合事件；普通模型 API 不替代完整 Codex harness |
-| AIMana 集成 | 原生 A2A 0.3 JSON-RPC | 与已检查的 AIMana 1.12.17 能力匹配；A2A 新版采用独立版本适配，不自动当成 0.3 |
-| 应用内入口 | Codex++ / AIMana++ 轻量 tweak | 选择会话、查看任务和连接状态，必要时补内部会话桥接 |
-| 模型调用工具入口 | MCP SDK | 让主调调用协调器工具；MCP 工具服务与 A2A Agent 调用分工不同，支持 MCP 不自动意味着能被当成完整执行 Agent |
-| 验证 | Node test，后续 UI 用 Playwright | 保留已验证状态机用例；增加连接器契约、故障恢复、多实例调度及真实软件端到端验收 |
+| 层               | 基线选型                                                 | 用途与边界                                                                                                              |
+| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 后端语言与运行时 | TypeScript + 独立 Node.js 24 进程                        | 复用现有 JavaScript 原型、fetch、子进程和 MCP 集成；不依赖 Electron renderer 存活                                       |
+| 本地通信         | 应用内部 IPC；跨应用按需用 Fastify + JSON HTTP API + SSE | 普通用户后台进程，不注册 Windows Service；仅需要入站桥接时监听 loopback 并鉴权；调度内核不依赖 HTTP，按需增加 WebSocket |
+| 任务引擎         | 显式状态机 + SQLite 持久队列                             | 管理依赖、并发、租约、疑问、审核、返工和恢复；状态变更与 outbox 事件在同一事务提交                                      |
+| 数据持久化       | SQLite + better-sqlite3 + WAL                            | 保存任务、会话映射、执行轮次、事件、审核和消息队列；单个后台服务负责写入；绑定并验证 Node 运行时与 native module 版本   |
+| 产物             | 本地文件目录 + 数据库引用与哈希                          | 大文件和原始报告存文件，SQLite 只存索引、元数据和校验信息                                                               |
+| 数据契约         | TypeScript 类型 + Zod + 协议版本                         | 校验连接器输入、模型结构化输出和状态转换；运行时边界也校验，不能只依赖编译类型                                          |
+| 独立界面         | React + TypeScript + Vite，Electron 桌面壳               | 连接管理、任务树、进度、疑问、审核历史、暂停/取消；Electron 负责桌面窗口/托盘，不承载唯一后台调度进程                   |
+| 主调集成         | Codex app-server（stdio）                                | 由协调器创建或明确绑定 thread，持续接收回合事件；普通模型 API 不替代完整 Codex harness                                  |
+| AIMana 集成      | 原生 A2A 0.3 JSON-RPC                                    | 与已检查的 AIMana 1.12.17 能力匹配；A2A 新版采用独立版本适配，不自动当成 0.3                                            |
+| 应用内入口       | Codex++ / AIMana++ 轻量 tweak                            | 选择会话、查看任务和连接状态，必要时补内部会话桥接                                                                      |
+| 模型调用工具入口 | MCP SDK                                                  | 让主调调用协调器工具；MCP 工具服务与 A2A Agent 调用分工不同，支持 MCP 不自动意味着能被当成完整执行 Agent                |
+| 验证             | Node test，后续 UI 用 Playwright                         | 保留已验证状态机用例；增加连接器契约、故障恢复、多实例调度及真实软件端到端验收                                          |
 
 依赖的确切版本在对应实施阶段锁定并记录测试结果。现有原型的 package-lock 仅覆盖已安装部分。首版单机、十个实例的目标先用本地队列，不引入 Redis、Kafka、Kubernetes 或分布式调度集群。
 

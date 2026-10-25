@@ -4,6 +4,26 @@ export interface Evidence {
   reference: string;
 }
 export interface Task {
+  contract?: Contract;
+  workspace?: string;
+  workflowId?: string;
+  nodeId?: string;
+  dependsOn?: string[];
+  queueReason?: string;
+  userQuestion?: string;
+  usedTokens?: number;
+  verifications?: {
+    round: number;
+    checks: {
+      command: string;
+      passed: boolean;
+      output: string;
+      error?: string;
+    }[];
+    changed: string[];
+    outside: string[];
+    complete?: boolean;
+  }[];
   id: string;
   goal: string;
   plan: string[];
@@ -37,7 +57,9 @@ export interface Task {
 export interface Connection {
   id: string;
   name: string;
-  kind: "a2a" | "codex";
+  kind: "a2a" | "codex" | "acp";
+  args?: string[];
+  capabilities?: Record<string, boolean | string>;
   endpoint?: string;
   command?: string;
   model?: string;
@@ -47,10 +69,49 @@ export interface Connection {
   hasToken?: boolean;
 }
 export interface Snapshot {
+  workflows?: Workflow[];
+  messages?: {
+    id: string;
+    taskId: string;
+    kind: string;
+    state: string;
+    text: string;
+    response?: string;
+    error?: string;
+  }[];
+  scheduler?: { maxConcurrent: number; perConnection: number };
   tasks: Task[];
   connections: Connection[];
   database: string;
   version: string;
+}
+export interface Contract {
+  autoAnswer: boolean;
+  verification: { command: string; args: string[]; timeoutMs?: number }[];
+  allowedPaths: string[];
+  maxTokens: number;
+  stopOnNoProgress: boolean;
+  isolateWorktree?: boolean;
+}
+export interface WorkflowNode {
+  id: string;
+  goal: string;
+  plan: string[];
+  acceptance: string[];
+  dependsOn: string[];
+  connectionId: string;
+  workspace?: string;
+  contract?: Contract;
+}
+export interface Workflow {
+  id: string;
+  goal: string;
+  acceptance: string[];
+  nodes: WorkflowNode[];
+  taskIds: string[];
+  status: string;
+  lastError?: string;
+  reviews: { decision: string; feedback: string; evidence: string[] }[];
 }
 declare global {
   interface Window {

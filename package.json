@@ -1,6 +1,6 @@
 {
   "name": "ai-cooperation",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "author": "zhangmaofa <zhangmaofa@users.noreply.github.com>",
   "description": "Local-first AI agent coordinator with persistent tasks and pluggable execution adapters",
@@ -10,7 +10,9 @@
   },
   "type": "module",
   "main": "desktop/main.cjs",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "better-sqlite3": "13.0.3",
@@ -29,6 +31,7 @@
   },
   "scripts": {
     "verify:codex": "node scripts/verify-codex.mjs",
+    "verify:workflow": "node scripts/verify-workflow.mjs",
     "start": "npm run build:ui && electron .",
     "build:ui": "tsc --noEmit && vite build",
     "package:win": "npm run build:ui && node scripts/package.mjs",

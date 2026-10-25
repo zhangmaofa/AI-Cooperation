@@ -16,7 +16,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS connections(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-      PRAGMA user_version = 2;
+      CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, dedupe TEXT UNIQUE NOT NULL, task_id TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      PRAGMA user_version = 3;
     `);
   }
   saveTask(task) {
@@ -37,6 +39,39 @@ export class Store {
       );
       for (const event of task.events)
         insert.run(task.id, event.seq, JSON.stringify(event));
+      if (task.pending) {
+        const request = task.pending;
+        this.enqueue({
+          id: request.messageId,
+          dedupe: request.messageId,
+          taskId: task.id,
+          direction: "executor",
+          kind: "instruction",
+          text: request.text,
+          state: task.status === "delivery_unknown" ? "unknown" : "sending",
+          round: task.rounds,
+          contextId: request.contextId,
+          at: task.updatedAt,
+        });
+        const record = this.messages(task.id).find(
+          (m) => m.id === request.messageId,
+        );
+        this.saveMessage({
+          ...record,
+          state: task.status === "delivery_unknown" ? "unknown" : "sending",
+        });
+      } else {
+        for (const record of this.messages(task.id).filter(
+          (m) => m.direction === "executor" && m.state === "sending",
+        ))
+          this.saveMessage({
+            ...record,
+            state: "delivered",
+            contextId: task.contextId,
+            remoteTaskId: task.remoteTaskId,
+            acknowledgedAt: task.updatedAt,
+          });
+      }
     })();
   }
   task(id) {
@@ -92,6 +127,59 @@ export class Store {
   }
   close() {
     this.db.close();
+  }
+  setting(key, fallback) {
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key=?")
+      .get(key);
+    return row ? JSON.parse(row.value) : fallback;
+  }
+  setSetting(key, value) {
+    this.db
+      .prepare(
+        "INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      )
+      .run(key, JSON.stringify(value));
+  }
+  enqueue(message) {
+    this.db
+      .prepare("INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?)")
+      .run(
+        message.id,
+        message.dedupe,
+        message.taskId,
+        message.state || "pending",
+        JSON.stringify({ ...message, state: message.state || "pending" }),
+      );
+    return this.messages().find((m) => m.dedupe === message.dedupe);
+  }
+  messages(taskId) {
+    return this.db
+      .prepare(
+        taskId
+          ? "SELECT payload FROM messages WHERE task_id=? ORDER BY rowid"
+          : "SELECT payload FROM messages ORDER BY rowid",
+      )
+      .all(...(taskId ? [taskId] : []))
+      .map((row) => JSON.parse(row.payload));
+  }
+  saveMessage(message) {
+    this.db
+      .prepare("UPDATE messages SET state=?,payload=? WHERE id=?")
+      .run(message.state, JSON.stringify(message), message.id);
+  }
+  workflows() {
+    return this.db
+      .prepare("SELECT payload FROM workflows ORDER BY rowid DESC")
+      .all()
+      .map((row) => JSON.parse(row.payload));
+  }
+  saveWorkflow(workflow) {
+    this.db
+      .prepare(
+        "INSERT INTO workflows VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+      )
+      .run(workflow.id, JSON.stringify(workflow));
   }
 }
 

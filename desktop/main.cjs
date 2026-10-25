@@ -124,6 +124,24 @@ else {
       worker.stdout.on("data", () => {});
       worker.stderr.on("data", () => {});
       worker.on("message", (message) => {
+        if (message.type === "save-secret") {
+          try {
+            if (
+              !safeStorage.isEncryptionAvailable() ||
+              typeof message.value !== "string" ||
+              message.value.length > 16000
+            )
+              throw new Error("安全存储不可用");
+            const ref = crypto.randomUUID();
+            vault[ref] = safeStorage
+              .encryptString(message.value)
+              .toString("base64");
+            saveVault();
+            worker.send({ type: "secret-result", id: message.id, value: ref });
+          } catch {
+            worker.send({ type: "secret-result", id: message.id, error: true });
+          }
+        }
         if (message.type === "ready" || message.type === "snapshot") {
           latest = message.snapshot;
           sendSnapshot();
@@ -176,12 +194,59 @@ else {
         "task.analyze",
         "task.create",
         "task.action",
+        "scheduler.save",
+        "workflow.analyze",
+        "workflow.create",
+        "workflow.start",
+        "workflow.review",
+        "pairing.start",
+        "pairing.status",
+        "connector.install",
+        "integration.info",
       ]);
       ipcMain.handle(
         "cooperation:request",
         async (event, method, data = {}) => {
           if (event.sender !== window?.webContents || !allowed.has(method))
             throw new Error("不支持的操作");
+          if (method === "integration.info")
+            return {
+              mcp: {
+                command: node,
+                args: [path.join(root, "mcp.mjs"), "--desktop"],
+                env: { AICO_DATA_DIR: dataDir },
+              },
+            };
+          if (method === "connector.install") {
+            const runtime = path.join(
+              process.env.LOCALAPPDATA || app.getPath("userData"),
+              ".aimana-plusplus",
+            );
+            if (!fs.existsSync(path.join(runtime, "runtime")))
+              throw new Error("未检测到 AIMana++ runtime，请先安装 AIMana++");
+            const destination = path.resolve(
+              runtime,
+              "tweaks",
+              "com.zhangmaofa.ai-cooperation",
+            );
+            if (
+              !destination.startsWith(
+                path.resolve(runtime, "tweaks") + path.sep,
+              )
+            )
+              throw new Error("插件目录无效");
+            fs.mkdirSync(destination, { recursive: true });
+            for (const name of ["manifest.json", "index.js"])
+              fs.copyFileSync(
+                path.join(root, "connectors", "aimana", name),
+                path.join(destination, name),
+              );
+            return {
+              message:
+                "连接插件已安装。请在 AIMana++ 面板重载插件；如未发现，请保存工作后重启 AIMana。",
+              path: destination,
+            };
+          }
           if (method === "connection.save") {
             if (data.token && typeof data.token !== "string")
               throw new Error("凭据格式错误");
