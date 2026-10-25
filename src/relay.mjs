@@ -61,9 +61,9 @@ export class Relay {
     requireText(ownerThreadId, 'ownerThreadId'); requireText(goal, 'goal');
     const steps = strings(plan, 'plan'); const checks = strings(acceptance, 'acceptance');
     if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 100) throw new Error('maxRounds must be 1..100');
-    if (!executor || !['type', 'endpoint', 'tokenEnv'].every(k => executor[k] === undefined || typeof executor[k] === 'string')) throw new Error('Invalid executor');
+    if (!executor || !['type', 'endpoint', 'tokenEnv', 'connectionId'].every(k => executor[k] === undefined || typeof executor[k] === 'string')) throw new Error('Invalid executor');
     // Persist only connection references. Never store a bearer token in task data.
-    const config = { type: requireText(executor.type, 'executor.type'), endpoint: executor.endpoint, tokenEnv: executor.tokenEnv };
+    const config = { type: requireText(executor.type, 'executor.type'), endpoint: executor.endpoint, tokenEnv: executor.tokenEnv, connectionId: executor.connectionId };
     this.adapterFactory(config); // Validate before writing a task.
     const task = {
       id: randomUUID(), ownerThreadId, goal, plan: steps,

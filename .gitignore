@@ -3,6 +3,9 @@ dist/
 build/
 release/
 coverage/
+outputs/
+test-results/
+playwright-report/
 .local/
 .cache/
 *.log

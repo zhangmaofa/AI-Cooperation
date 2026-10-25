@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 export class A2AAdapter {
-  constructor({ endpoint, tokenEnv = 'AIMANA_A2A_TOKEN' }, { fetchImpl = fetch } = {}) {
+  constructor({ endpoint, tokenEnv = 'AIMANA_A2A_TOKEN' }, { fetchImpl = fetch, tokenProvider } = {}) {
     const url = new URL(endpoint);
     if (url.username || url.password || url.search || url.hash) throw new Error('Endpoint must not contain credentials, query or fragment');
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -9,10 +9,11 @@ export class A2AAdapter {
     this.endpoint = url.href;
     this.tokenEnv = tokenEnv;
     this.fetch = fetchImpl;
+    this.tokenProvider = tokenProvider;
   }
 
   async rpc(method, params) {
-    const token = process.env[this.tokenEnv];
+    const token = this.tokenProvider ? await this.tokenProvider() : process.env[this.tokenEnv];
     if (!token) throw new Error(`Missing token environment variable: ${this.tokenEnv}`);
     const id = randomUUID();
     const response = await this.fetch(this.endpoint, {

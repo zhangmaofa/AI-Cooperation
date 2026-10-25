@@ -1,0 +1,210 @@
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+
+export class CodexClient {
+  constructor(connection, { spawnImpl = spawn } = {}) {
+    this.connection = connection;
+    this.pending = new Map();
+    this.turns = new Map();
+    this.nextId = 1;
+    this.spawn = spawnImpl;
+  }
+  async start() {
+    if (this.starting) return this.starting;
+    this.starting = (async () => {
+      this.child = this.spawn(
+        this.connection.command || "codex.exe",
+        ["app-server", "--listen", "stdio://"],
+        { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
+      );
+      const child = this.child;
+      this.child.stdin.on("error", () => {});
+      this.child.stderr.on("data", () => {}); // Do not forward model/runtime logs or credentials into UI.
+      this.child.on("error", (error) => {
+        if (this.child === child)
+          this.fail(
+            new Error(
+              `无法启动 Codex：${error.code || "进程错误"}，请检查程序路径`,
+            ),
+          );
+      });
+      this.child.on("exit", () => {
+        if (this.child === child)
+          this.fail(new Error("Codex 连接已关闭，请重新测试连接"));
+      });
+      this.lines = createInterface({ input: this.child.stdout });
+      this.lines.on("line", (line) => {
+        try {
+          this.message(JSON.parse(line));
+        } catch {}
+      });
+      await this.request("initialize", {
+        clientInfo: {
+          name: "ai_cooperation",
+          title: "AI-Cooperation",
+          version: "0.2.0",
+        },
+      });
+      this.send({ method: "initialized", params: {} });
+    })();
+    try {
+      await this.starting;
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+  }
+  send(message) {
+    this.child?.stdin.write(JSON.stringify(message) + "\n");
+  }
+  request(method, params, timeout = 20000) {
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Codex ${method} 响应超时`));
+      }, timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      this.send({ id, method, params });
+    });
+  }
+  message(message) {
+    if (message.method && message.id !== undefined) {
+      // Coordinator only has read-only planning/review responsibilities. Never auto-approve tool or authentication requests.
+      this.send({
+        id: message.id,
+        error: {
+          code: -32601,
+          message:
+            "Interactive approval is not available in this read-only coordinator connection",
+        },
+      });
+      return;
+    }
+    if (message.id !== undefined) {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      this.pending.delete(message.id);
+      message.error
+        ? pending.reject(
+            new Error(
+              `Codex 请求失败：${String(message.error.message).slice(0, 400)}`,
+            ),
+          )
+        : pending.resolve(message.result);
+      return;
+    }
+    const params = message.params || {};
+    const turn = this.turns.get(params.threadId);
+    if (!turn) return;
+    if (
+      message.method === "item/completed" &&
+      params.item?.type === "agentMessage"
+    )
+      turn.text = params.item.text || turn.text;
+    if (message.method === "turn/completed") {
+      this.turns.delete(params.threadId);
+      clearTimeout(turn.timer);
+      params.turn?.status === "completed"
+        ? turn.resolve({ text: turn.text, threadId: params.threadId })
+        : turn.reject(
+            new Error(`Codex 回合未完成：${params.turn?.status || "unknown"}`),
+          );
+    }
+  }
+  async inspect() {
+    await this.start();
+    const models = await this.request("model/list", { limit: 50 });
+    return {
+      message: "Codex app-server 已连接；模型列表读取成功（尚未发起模型推理）",
+      models: (models.data || []).map((m) => ({
+        id: m.model || m.id,
+        name: m.displayName || m.id,
+      })),
+    };
+  }
+  async run(prompt, threadId) {
+    await this.start();
+    if (threadId)
+      await this.request("thread/resume", { threadId, excludeTurns: true });
+    else {
+      const params = {
+        sandbox: "read-only",
+        approvalPolicy: "never",
+        ...(this.connection.model ? { model: this.connection.model } : {}),
+        ...(this.connection.cwd ? { cwd: this.connection.cwd } : {}),
+      };
+      threadId = (await this.request("thread/start", params)).thread.id;
+    }
+    if (this.turns.has(threadId))
+      throw new Error("该主调会话正在工作，请等待本回合结束");
+    const result = new Promise((resolve, reject) => {
+      const turn = { text: "", resolve, reject, timer: null, turnId: null };
+      turn.timer = setTimeout(() => {
+        this.turns.delete(threadId);
+        if (turn.turnId)
+          this.request("turn/interrupt", {
+            threadId,
+            turnId: turn.turnId,
+          }).catch(() => {});
+        reject(
+          new Error(
+            "主调超过 3 分钟未完成，已请求停止；请查看 Codex 会话后再重试",
+          ),
+        );
+      }, 180000);
+      this.turns.set(threadId, turn);
+    });
+    // Attach a rejection handler immediately; turn/start may fail before callers await the result.
+    result.catch(() => {});
+    try {
+      const reply = await this.request("turn/start", {
+        threadId,
+        input: [{ type: "text", text: prompt }],
+      });
+      if (this.turns.has(threadId))
+        this.turns.get(threadId).turnId = reply.turn.id;
+    } catch (error) {
+      const turn = this.turns.get(threadId);
+      if (turn) {
+        clearTimeout(turn.timer);
+        this.turns.delete(threadId);
+        turn.reject(error);
+      }
+      throw error;
+    }
+    return result;
+  }
+  fail(error) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    for (const turn of this.turns.values()) {
+      clearTimeout(turn.timer);
+      turn.reject(error);
+    }
+    this.pending.clear();
+    this.turns.clear();
+    this.starting = null;
+  }
+  close() {
+    this.fail(new Error("Codex 连接已关闭"));
+    this.lines?.close();
+    this.child?.kill();
+    this.child = null;
+  }
+}
+
+export function parseModelJSON(text) {
+  const trimmed = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw new Error("Codex 未返回有效的结构化结果，请重试或手动填写计划");
+  }
+}
