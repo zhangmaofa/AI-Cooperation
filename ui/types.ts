@@ -19,7 +19,12 @@ export interface Task {
   autoReview: boolean;
   busy: boolean;
   updatedAt: string;
-  executor: { type: string; connectionId?: string };
+  executor: {
+    type: string;
+    connectionId?: string;
+    cwd?: string;
+    model?: string;
+  };
   result?: { text: string };
   reviews: {
     decision: string;

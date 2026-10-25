@@ -78,7 +78,7 @@ test("desktop connection snapshots never expose credential references; invalid e
       maxRounds: 5,
       connectionId: snapshot.connections[0].id,
     }),
-    /A2A/,
+    /工作目录/,
   );
   service.close();
 });

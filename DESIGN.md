@@ -4,6 +4,8 @@
 
 ## 0. 桌面预览版 0.2 交付更新
 
+0.2.1 补充 Codex 执行角色：同一 Codex 连接可以分别用于主调和执行，独立 thread，模型可按连接分别配置。主调只读，执行限定在明确选择的工作目录使用 workspace-write；审核与返工通过原绑定会话衔接。执行会话与轮次先持久化到 SQLite，再在后台等待结果。没有配置 AIMana/A2A 时也可以用本机 Codex 开工。
+
 本文下方保留总体设计与后续路线；当前状态以项目 README 为准。0.2 已实现 Electron/React/TypeScript 图形客户端、独立 Node 后台进程、SQLite/better-sqlite3/WAL、Windows 加密凭据、模拟演示、真实 A2A 连接与派发入口、Codex app-server 计划和只读审核入口、同上下文返工，以及托盘运行。当前未开放本地 HTTP 端口，不需要 Fastify。
 
 真实 AIMana 执行闭环尚未联调，桌面原有聊天接管、跨任务并发限制、文件写入隔离、远端取消和金额预算仍需后续完成。MCP/CLI 保留原 JSON 存储，尚未与桌面 SQLite 合并，不能认为它们已经共享任务列表。

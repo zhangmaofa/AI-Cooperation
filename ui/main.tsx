@@ -139,7 +139,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.2.0",
+    version: "0.2.1",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -508,8 +508,8 @@ function App() {
               <div className="connection-tip">
                 <Icon name="info" />
                 <p>
-                  Codex 用于制定计划与审核；AIMana 通过原生 A2A
-                  接收执行任务。连接测试不会自动派发任务。
+                  Codex 既可主调，也可执行；同一连接可绑定独立会话。AIMana 通过
+                  A2A 接收任务。连接测试不会自动派发任务。
                 </p>
               </div>
               <div className="agent-grid">
@@ -583,7 +583,9 @@ function App() {
                 <h2>这个版本能做什么</h2>
                 <ul className="feature-list">
                   <li>创建模拟或真实 A2A 任务，保存进度与同会话返工记录。</li>
-                  <li>配置 Codex app-server，生成真实计划并进行只读审核。</li>
+                  <li>
+                    Codex 可同时担任只读主调和工作区执行 Agent，两者会话独立。
+                  </li>
                   <li>
                     保存 SQLite
                     任务历史；真实连接需要你已有的软件登录与对应权限。
@@ -948,6 +950,12 @@ function TaskDetail({
             <details className="session-details">
               <summary>查看会话绑定</summary>
               <div>
+                {task.executor.cwd && (
+                  <>
+                    <span>执行目录</span>
+                    <code>{task.executor.cwd}</code>
+                  </>
+                )}
                 <span>主调会话</span>
                 <code>{task.ownerThreadId}</code>
                 <span>执行上下文</span>
@@ -1076,8 +1084,15 @@ function NewTask({
     connections.find((c) => c.kind === "codex")?.id || "",
   );
   const [connectionId, setConnection] = useState(
-    connections.find((c) => c.kind === "a2a")?.id || "",
+    connections.find((c) => c.kind === "a2a")?.id ||
+      connections.find((c) => c.kind === "codex")?.id ||
+      "",
   );
+  const initialExecutor =
+    connections.find((c) => c.kind === "a2a") ||
+    connections.find((c) => c.kind === "codex");
+  const [workspace, setWorkspace] = useState(initialExecutor?.cwd || "");
+  const selectedExecutor = connections.find((c) => c.id === connectionId);
   const [binding, setBinding] = useState<{
     threadId: string;
     goal: string;
@@ -1112,6 +1127,7 @@ function NewTask({
       acceptance: lines(acceptance),
       mode,
       connectionId,
+      workspace: selectedExecutor?.kind === "codex" ? workspace : undefined,
       coordinatorId:
         binding?.goal === goal && mode === "real" ? coordinatorId : undefined,
       threadId:
@@ -1150,7 +1166,7 @@ function NewTask({
         <p className="hint">
           {mode === "demo"
             ? "本地模拟任务流，不调用真实模型或修改项目文件。"
-            : "使用已配置的真实连接。制定计划和审核会调用 Codex，执行会交给对应 A2A Agent。"}
+            : "主调与执行可以都选 Codex，使用独立会话；也可以交给 AIMana 等 A2A 执行 Agent。"}
         </p>
         <label>
           任务目标
@@ -1191,20 +1207,65 @@ function NewTask({
               <select
                 aria-label="执行 Agent"
                 value={connectionId}
-                onChange={(e) => setConnection(e.target.value)}
+                onChange={(e) => {
+                  setConnection(e.target.value);
+                  setWorkspace(
+                    connections.find((c) => c.id === e.target.value)?.cwd || "",
+                  );
+                }}
               >
-                <option value="">请选择 A2A 执行连接</option>
+                <option value="">请选择执行 Agent</option>
                 {connections
-                  .filter((c) => c.kind === "a2a")
+                  .filter((c) => c.kind === "a2a" || c.kind === "codex")
                   .map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {c.name} · {c.kind === "codex" ? "Codex" : "A2A"}
                     </option>
                   ))}
               </select>
             </label>
           </div>
         )}
+        {mode === "real" && selectedExecutor?.kind === "codex" && (
+          <>
+            <label>
+              执行工作目录
+              <div className="input-action">
+                <input
+                  aria-label="执行工作目录"
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                  placeholder="选择允许执行 Agent 修改的具体项目文件夹"
+                />
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    const value = await api.pickDirectory();
+                    if (value) setWorkspace(value);
+                  }}
+                >
+                  选择目录
+                </button>
+              </div>
+            </label>
+            <p className="hint">
+              执行 Codex
+              使用工作区写入沙箱；主调仍只读。请选择工作目录后创建任务，不会把主调会话改成执行会话。
+            </p>
+          </>
+        )}
+        {mode === "real" && !connectionId && (
+          <div className="warning">
+            尚未选择执行 Agent。可以选择本机 Codex，无需先配置 AIMana。
+          </div>
+        )}
+        {mode === "real" &&
+          selectedExecutor?.kind === "codex" &&
+          !workspace.trim() && (
+            <div className="warning">
+              还不能开工：请选择执行工作目录，再创建任务。
+            </div>
+          )}
         <div className="field-title">
           <strong>执行计划与验收</strong>
           {mode === "real" && (
@@ -1278,7 +1339,9 @@ function NewTask({
             !lines(plan).length ||
             !lines(acceptance).length ||
             !maxRounds ||
-            (mode === "real" && !connectionId)
+            (mode === "real" &&
+              (!connectionId ||
+                (selectedExecutor?.kind === "codex" && !workspace.trim())))
           }
           onClick={create}
         >
@@ -1337,7 +1400,7 @@ function AgentCard({
       <h2>{connection.name}</h2>
       <span className="small-label">
         {connection.kind === "codex"
-          ? "主调 · CODEX APP-SERVER"
+          ? "主调 / 执行 · CODEX APP-SERVER"
           : "执行 · A2A 0.3"}
       </span>
       <p className="connection-address">
@@ -1450,7 +1513,7 @@ function ConnectionForm({
             onChange={(e) => setKind(e.target.value as "a2a" | "codex")}
           >
             <option value="a2a">A2A 0.3 · 执行 Agent</option>
-            <option value="codex">Codex app-server · 主调</option>
+            <option value="codex">Codex app-server · 主调或执行</option>
           </select>
         </label>
         {kind === "a2a" ? (
@@ -1513,7 +1576,7 @@ function ConnectionForm({
                   aria-label="工作目录"
                   value={cwd}
                   onChange={(e) => setCwd(e.target.value)}
-                  placeholder="主调可只读检查产物的项目目录"
+                  placeholder="默认项目目录；执行时也可为任务单独选择"
                 />
                 <button
                   className="secondary"
@@ -1528,7 +1591,7 @@ function ConnectionForm({
             </label>
             <p className="hint">
               使用本机 Codex
-              已有登录。这里创建的是协调器持有的只读主调会话，不会接管桌面已有聊天。
+              已有登录。同一连接可用于主调或执行；主调会话只读，执行会话限定在选定工作目录中写入，两者彼此独立。
             </p>
           </>
         )}

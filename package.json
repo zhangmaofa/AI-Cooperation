@@ -1,6 +1,6 @@
 {
   "name": "ai-cooperation",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "author": "zhangmaofa <zhangmaofa@users.noreply.github.com>",
   "description": "Local-first AI agent coordinator with persistent tasks and pluggable execution adapters",
@@ -28,6 +28,7 @@
     "vite": "8.3.5"
   },
   "scripts": {
+    "verify:codex": "node scripts/verify-codex.mjs",
     "start": "npm run build:ui && electron .",
     "build:ui": "tsc --noEmit && vite build",
     "package:win": "npm run build:ui && node scripts/package.mjs",

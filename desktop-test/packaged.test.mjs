@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "@playwright/test";
 
-const executablePath = path.resolve("release/win-unpacked/AI-Cooperation.exe");
+const executablePath = path.resolve(
+  "release",
+  JSON.parse(readFileSync("package.json", "utf8")).version,
+  "win-unpacked",
+  "AI-Cooperation.exe",
+);
 test(
   "packaged Windows app uses bundled Node runtime and persists a real SQLite task",
   { timeout: 45000, skip: !existsSync(executablePath) },

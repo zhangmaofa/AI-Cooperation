@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 export class CodexClient {
-  constructor(connection, { spawnImpl = spawn } = {}) {
+  constructor(connection, { spawnImpl = spawn, role = "coordinator" } = {}) {
     this.connection = connection;
     this.pending = new Map();
     this.turns = new Map();
     this.nextId = 1;
     this.spawn = spawnImpl;
+    this.role = role;
   }
   async start() {
     if (this.starting) return this.starting;
@@ -42,7 +43,7 @@ export class CodexClient {
         clientInfo: {
           name: "ai_cooperation",
           title: "AI-Cooperation",
-          version: "0.2.0",
+          version: "0.2.1",
         },
       });
       this.send({ method: "initialized", params: {} });
@@ -70,13 +71,13 @@ export class CodexClient {
   }
   message(message) {
     if (message.method && message.id !== undefined) {
-      // Coordinator only has read-only planning/review responsibilities. Never auto-approve tool or authentication requests.
+      // Both profiles decline interactive escalation; workers can write only in the selected workspace sandbox.
       this.send({
         id: message.id,
         error: {
           code: -32601,
           message:
-            "Interactive approval is not available in this read-only coordinator connection",
+            "Interactive escalation is not available in this connection; stay within the configured sandbox",
         },
       });
       return;
@@ -124,21 +125,38 @@ export class CodexClient {
       })),
     };
   }
-  async run(prompt, threadId) {
+  async openThread(threadId) {
     await this.start();
+    const params = {
+      sandbox: this.role === "executor" ? "workspace-write" : "read-only",
+      approvalPolicy: "never",
+      ...(this.connection.model ? { model: this.connection.model } : {}),
+      ...(this.connection.cwd ? { cwd: this.connection.cwd } : {}),
+    };
     if (threadId)
-      await this.request("thread/resume", { threadId, excludeTurns: true });
-    else {
-      const params = {
-        sandbox: "read-only",
-        approvalPolicy: "never",
-        ...(this.connection.model ? { model: this.connection.model } : {}),
-        ...(this.connection.cwd ? { cwd: this.connection.cwd } : {}),
-      };
-      threadId = (await this.request("thread/start", params)).thread.id;
-    }
+      await this.request("thread/resume", {
+        ...params,
+        threadId,
+        excludeTurns: true,
+      });
+    else threadId = (await this.request("thread/start", params)).thread.id;
+    return threadId;
+  }
+  async run(
+    prompt,
+    threadId,
+    {
+      onStarted,
+      threadPrepared = false,
+      timeoutMs = this.role === "executor" ? 900000 : 180000,
+    } = {},
+  ) {
+    if (threadPrepared) {
+      await this.start();
+      if (!threadId) throw new Error("缺少已打开的 Codex 会话");
+    } else threadId = await this.openThread(threadId);
     if (this.turns.has(threadId))
-      throw new Error("该主调会话正在工作，请等待本回合结束");
+      throw new Error("该 Codex 会话正在工作，请等待本回合结束");
     const result = new Promise((resolve, reject) => {
       const turn = { text: "", resolve, reject, timer: null, turnId: null };
       turn.timer = setTimeout(() => {
@@ -148,12 +166,8 @@ export class CodexClient {
             threadId,
             turnId: turn.turnId,
           }).catch(() => {});
-        reject(
-          new Error(
-            "主调超过 3 分钟未完成，已请求停止；请查看 Codex 会话后再重试",
-          ),
-        );
-      }, 180000);
+        reject(new Error("Codex 回合超时，已请求停止；请核对会话状态后再重试"));
+      }, timeoutMs);
       this.turns.set(threadId, turn);
     });
     // Attach a rejection handler immediately; turn/start may fail before callers await the result.
@@ -165,6 +179,7 @@ export class CodexClient {
       });
       if (this.turns.has(threadId))
         this.turns.get(threadId).turnId = reply.turn.id;
+      onStarted?.({ threadId, turnId: reply.turn.id });
     } catch (error) {
       const turn = this.turns.get(threadId);
       if (turn) {

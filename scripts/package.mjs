@@ -1,5 +1,7 @@
 import { build, Platform } from "electron-builder";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+const version = JSON.parse(readFileSync("package.json", "utf8")).version;
 await build({
   targets: Platform.WINDOWS.createTarget(["dir"]),
   config: {
@@ -8,7 +10,7 @@ await build({
     asar: false,
     npmRebuild: false,
     electronDist: path.resolve("node_modules/electron/dist"),
-    directories: { output: "release" },
+    directories: { output: path.join("release", version) },
     files: ["desktop/**", "backend/**", "src/**", "dist/ui/**", "package.json"],
     extraResources: [{ from: process.execPath, to: "runtime/node.exe" }],
     win: { executableName: "AI-Cooperation", signAndEditExecutable: false },

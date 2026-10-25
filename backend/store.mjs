@@ -15,7 +15,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(task_id TEXT NOT NULL REFERENCES tasks(id), seq INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(task_id, seq));
       CREATE TABLE IF NOT EXISTS connections(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      PRAGMA user_version = 1;
+      CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      PRAGMA user_version = 2;
     `);
   }
   saveTask(task) {
@@ -68,6 +69,26 @@ export class Store {
         "INSERT INTO connections VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
       )
       .run(value.id, JSON.stringify(value));
+  }
+  saveExecution(value) {
+    this.db
+      .prepare(
+        "INSERT INTO executions VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+      )
+      .run(value.id, JSON.stringify(value));
+  }
+  execution(id) {
+    const row = this.db
+      .prepare("SELECT payload FROM executions WHERE id=?")
+      .get(id);
+    if (!row) throw new Error("执行轮次不存在，无法恢复该 Codex 会话");
+    return JSON.parse(row.payload);
+  }
+  executions() {
+    return this.db
+      .prepare("SELECT payload FROM executions")
+      .all()
+      .map((row) => JSON.parse(row.payload));
   }
   close() {
     this.db.close();
