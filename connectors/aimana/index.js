@@ -1,5 +1,36 @@
 // User-initiated pairing only. No credential logging, persistence, or automatic token rotation.
 let cleanup;
+const pairingErrors = {
+  invalid_code: "配对码格式不正确，请完整复制协调器生成的配对码。",
+  expired_code: "配对码已过期或已使用，请回协调器生成新码。",
+  coordinator_unreachable:
+    "无法连接 AI-Cooperation。请保持协调器运行，并使用当前窗口生成的新配对码。",
+  agent_disabled:
+    "选中的 Agent 尚未启用 Workspace，或配置已变化。请检查原生设置后重新读取 Agent。",
+  missing_token:
+    "选中的 Agent 没有原生连接凭据，请在 AIMana 原生 Workspace 设置中检查该 Agent。",
+  token_unavailable:
+    "无法读取原生 Agent 连接凭据，请检查 AIMana 的凭据设置；连接器不会自动重置凭据。",
+  service_unavailable:
+    "AIMana 本机服务未能启动，请在原生 Workspace 设置中检查服务状态。",
+  card_unavailable: "AIMana 本机服务未响应 Agent Card，请检查服务状态后重试。",
+  card_unauthorized: "AIMana 拒绝访问这个 Agent，请检查原生 Agent 的连接权限。",
+  agent_unavailable:
+    "本机服务没有提供选中的 Agent，请重新读取 Agent 并检查 Workspace 状态。",
+  invalid_card: "AIMana 返回的 Agent Card 不兼容，请检查软件版本。",
+  secure_storage_failed:
+    "协调器无法加密保存连接凭据，请检查 Windows 安全存储是否可用。",
+  connection_save_failed:
+    "协调器未能保存 Agent 连接，请检查该连接是否正在执行任务。",
+};
+function failure(code) {
+  return {
+    ok: false,
+    code,
+    message:
+      pairingErrors[code] || "配对未完成，请更新协调器与连接插件后重试。",
+  };
+}
 module.exports = {
   start(api) {
     if (api.process === "main") {
@@ -10,21 +41,37 @@ module.exports = {
         // AIMana++ passes handler payload as the first argument; support both IPC wrappers.
         input ||= _event;
         const match = /^(\d{1,5})\.([a-f0-9]{36})$/.exec(input.code || "");
-        if (!match || Number(match[1]) > 65535)
-          throw new Error("请粘贴 AI-Cooperation 显示的完整配对码");
-        const response = await fetch(`http://127.0.0.1:${match[1]}/pair`, {
-          method: "POST",
-          redirect: "error",
-          signal: AbortSignal.timeout(15000),
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            code: input.code,
-            agentId: input.agentId,
-            token: input.token,
-          }),
-        });
-        if (!response.ok)
-          throw new Error("配对失败，请确认协调器仍在运行并重新生成配对码");
+        if (!match || Number(match[1]) > 65535 || Number(match[1]) < 1)
+          return failure("invalid_code");
+        let response;
+        try {
+          response = await fetch(`http://127.0.0.1:${match[1]}/pair`, {
+            method: "POST",
+            redirect: "error",
+            signal: AbortSignal.timeout(15000),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: input.code,
+              agentId: input.agentId,
+              token: input.token,
+            }),
+          });
+        } catch {
+          return failure("coordinator_unreachable");
+        }
+        if (!response.ok) {
+          let body;
+          try {
+            body = await response.json();
+          } catch {}
+          if (body?.code && pairingErrors[body.code]) return failure(body.code);
+          return response.status === 403
+            ? failure("expired_code")
+            : {
+                ok: false,
+                message: `协调器拒绝配对（HTTP ${response.status}）。请更新到 0.3.1 后生成新码查看具体原因。`,
+              };
+        }
         return { ok: true };
       });
       cleanup = () => ipcMain.removeHandler(channel);
@@ -76,24 +123,61 @@ module.exports = {
           }
           pair.disabled = true;
           try {
-            const secret = await ipcRenderer.invoke(
-              "a2a:token:reveal",
-              agents.value,
-            );
-            if (!secret?.token)
-              throw new Error(
-                "当前 Agent 没有连接凭据，请先在原生设置中启用 Workspace",
+            const config = await ipcRenderer.invoke("a2a:config:get");
+            if (
+              !config.agents?.some(
+                (agent) => agent.agentId === agents.value && agent.enabled,
+              )
+            ) {
+              status.textContent = pairingErrors.agent_disabled;
+              return;
+            }
+            status.textContent = "正在检查 AIMana 本机服务…";
+            const state = await ipcRenderer.invoke("a2a:server:status");
+            if (state?.phase !== "running") {
+              status.textContent = "正在启动已配置的 AIMana 本机服务…";
+              let restarted;
+              try {
+                restarted = await ipcRenderer.invoke("a2a:server:retry");
+              } catch {
+                status.textContent = pairingErrors.service_unavailable;
+                return;
+              }
+              if (restarted?.phase !== "running") {
+                status.textContent = pairingErrors.service_unavailable;
+                return;
+              }
+            }
+            let secret;
+            try {
+              secret = await ipcRenderer.invoke(
+                "a2a:token:reveal",
+                agents.value,
               );
-            await api.ipc.invoke("pair", {
+            } catch {
+              status.textContent = pairingErrors.token_unavailable;
+              return;
+            }
+            if (!secret?.token) {
+              status.textContent = pairingErrors.missing_token;
+              return;
+            }
+            status.textContent = "正在与协调器配对并加密保存连接…";
+            const result = await api.ipc.invoke("pair", {
               code: code.value.trim(),
               agentId: agents.value,
               token: secret.token,
             });
+            if (!result?.ok) {
+              status.textContent =
+                result?.message || "连接插件返回不兼容，请重载插件后重试。";
+              return;
+            }
             code.value = "";
             status.textContent = "配对成功，可以回 AI-Cooperation 派发任务。";
           } catch {
             status.textContent =
-              "配对未完成。请检查 Agent 已启用 Workspace，重新生成配对码再试。";
+              "无法完成配对调用。请重载 AIMana++ 连接插件，并确认 AIMana 原生 Workspace 接口可用。";
           } finally {
             pair.disabled = false;
           }

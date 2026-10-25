@@ -11,11 +11,18 @@ test("AIMana connector reads native token only after explicit pairing and sends 
   const handlers = new Map();
   const calls = [];
   let posts = 0;
+  let running = false;
   const native = {
     ipcMain: { removeHandler() {} },
     ipcRenderer: {
       async invoke(method) {
         calls.push(method);
+        if (method === "a2a:server:status")
+          return { phase: running ? "running" : "stopped" };
+        if (method === "a2a:server:retry") {
+          running = true;
+          return { phase: "running" };
+        }
         return method === "a2a:config:get"
           ? {
               agents: [
@@ -94,8 +101,23 @@ test("AIMana connector reads native token only after explicit pairing and sends 
     "12345." + "a".repeat(36);
   await root.children.find((e) => e.textContent === "配对选中 Agent").onclick();
   assert.equal(posts, 1);
-  assert.deepEqual(calls, ["a2a:config:get", "a2a:token:reveal"]);
+  assert.deepEqual(calls, [
+    "a2a:config:get",
+    "a2a:config:get",
+    "a2a:server:status",
+    "a2a:server:retry",
+    "a2a:token:reveal",
+  ]);
   assert.equal(root.children.find((e) => e.tag === "input").value, "");
+  root.children.find((e) => e.tag === "input").value =
+    "12345." + "b".repeat(36);
+  await root.children.find((e) => e.textContent === "配对选中 Agent").onclick();
+  assert.equal(posts, 2);
+  assert.equal(
+    calls.filter((method) => method === "a2a:server:retry").length,
+    1,
+    "already-running native service must not be restarted",
+  );
   main.module.exports.stop();
   renderer.module.exports.stop();
 });

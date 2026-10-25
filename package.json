@@ -1,6 +1,6 @@
 {
   "name": "ai-cooperation",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "author": "zhangmaofa <zhangmaofa@users.noreply.github.com>",
   "description": "Local-first AI agent coordinator with persistent tasks and pluggable execution adapters",

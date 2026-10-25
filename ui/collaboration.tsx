@@ -404,13 +404,18 @@ export function AimannaPairing({ call }: { call: Call }) {
           <button
             className="secondary"
             onClick={async () => {
-              const result = await call<{ state: string }>("pairing.status");
+              const result = await call<{ state: string; error?: string }>(
+                "pairing.status",
+              );
               setMessage(
                 result?.state === "paired"
                   ? "已配对，连接已保存。请在下方测试连接后派发任务。"
-                  : result?.state === "expired"
-                    ? "配对码已过期，请重新生成。"
-                    : "等待 AIMana 确认配对。",
+                  : result?.state === "failed"
+                    ? result.error ||
+                      "配对失败，请查看 AIMana 连接插件的具体提示。"
+                    : result?.state === "expired"
+                      ? "配对码已过期，请重新生成。"
+                      : "等待 AIMana 确认配对。",
               );
             }}
           >

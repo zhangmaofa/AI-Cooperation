@@ -106,7 +106,7 @@ export class DesktopService {
       workflows: this.store.workflows(),
       scheduler: this.collaboration.settings(),
       database: this.store.path,
-      version: "0.3.0",
+      version: "0.3.1",
     };
   }
   changed() {

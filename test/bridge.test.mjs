@@ -10,6 +10,50 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { DesktopService } from "../backend/service.mjs";
 import { startBridge } from "../backend/bridge.mjs";
 
+test("pairing distinguishes an unavailable native service and does not expose secrets on malformed input", async () => {
+  const closed = createServer();
+  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const port = closed.address().port;
+  await new Promise((resolve) => closed.close(resolve));
+  const root = await mkdtemp(path.join(os.tmpdir(), "aico-pair-error-"));
+  const service = new DesktopService({ root });
+  const bridge = await startBridge(service, {
+    root,
+    aimanaPort: port,
+    saveSecret: async () => "unused",
+  });
+  try {
+    const pairing = bridge.startPairing();
+    const url = `http://127.0.0.1:${pairing.code.split(".")[0]}/pair`;
+    const malformed = await fetch(url, { method: "POST", body: "{" });
+    const errorText = await malformed.text();
+    assert.equal(errorText.includes(pairing.code), false);
+    assert.equal(bridge.pairingStatus().state, "pending");
+    const result = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({
+        code: pairing.code,
+        agentId: "fixture",
+        token: "never-print-native-fixture",
+      }),
+    });
+    const body = await result.json();
+    assert.equal(result.status, 400);
+    assert.equal(body.code, "card_unavailable");
+    assert.equal(body.error.includes("Workspace"), false);
+    const state = bridge.pairingStatus();
+    assert.equal(state.state, "failed");
+    assert.equal(state.code, "card_unavailable");
+    assert.equal(
+      JSON.stringify(state).includes("never-print-native-fixture"),
+      false,
+    );
+  } finally {
+    await bridge.close();
+    service.close();
+  }
+});
+
 test("authenticated desktop MCP uses the same SQLite backend and keeps owner binding", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aico-bridge-"));
   const service = new DesktopService({ root });

@@ -1,7 +1,7 @@
 {
   "id": "com.zhangmaofa.ai-cooperation",
   "name": "AI-Cooperation 连接器",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "githubRepo": "zhangmaofa/AI-Cooperation",
   "description": "选择本机 Agent，与 AI-Cooperation 配对；不更改模型、账号或 Workspace 开关。",
   "author": "zhangmaofa",

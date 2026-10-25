@@ -2,7 +2,7 @@
 
 一个 Windows 本地 AI Agent 协调工作空间。Codex 主调制定计划与审核，AIMana 等执行 Agent 完成具体工作，协调器保存任务、会话绑定和返工记录。
 
-当前版本：**0.3.0 桌面预览版**。支持协作计划、子任务依赖、多个执行器调度、主控自动答疑、可靠消息记录、独立验证与总体审核。Codex 可分别担任主控和执行；执行协议包括 Codex app-server、A2A 0.3 和 ACP v1。新增 AIMana++ 配对连接器。真实 AIMana 配对及执行、更多厂商的 ACP 兼容性仍需实测；不接管已有桌面聊天。
+当前版本：**0.3.1 桌面预览版**。支持协作计划、子任务依赖、多个执行器调度、主控自动答疑、可靠消息记录、独立验证与总体审核。Codex 可分别担任主控和执行；执行协议包括 Codex app-server、A2A 0.3 和 ACP v1。新增 AIMana++ 配对连接器。真实 AIMana 配对及执行、更多厂商的 ACP 兼容性仍需实测；不接管已有桌面聊天。
 
 ![AI-Cooperation 任务工作台](docs/assets/desktop-home.png)
 
@@ -11,7 +11,7 @@
 本机打包输出：
 
 ```text
-E:\AI-Cooperation\release\0.3.0\win-unpacked\AI-Cooperation.exe
+E:\AI-Cooperation\release\0.3.1\win-unpacked\AI-Cooperation.exe
 ```
 
 双击即可运行。整个 `win-unpacked` 文件夹是运行包，包含 Electron、配套资源和独立 Node 运行时，不能只复制一个 exe。此目录不会提交到 Git。打包按版本分别输出，不覆盖正在运行的旧程序；更新时先保存或复制旧窗口中未提交的计划，再从托盘完全退出旧版并打开新版。
@@ -69,10 +69,12 @@ npm start
 1. 点击“安装 / 更新 AIMana 连接插件”。需要已有 AIMana++。只复制本产品的连接器文件，不重启 AIMana。
 2. 在 AIMana++ 面板重载；如未发现插件，保存工作后重启 AIMana。连接器针对本机 AIMana 1.12.17 的原生接口编写。
 3. 在协调器生成有效期两分钟的配对码，粘贴到 AIMana++ 面板的“AI-Cooperation 协作连接”。
-4. 读取并选择一个已启用 Workspace 的 Agent，点击配对。它会检查原生 Agent Card，再加密保存 Agent 的 A2A 连接凭据；不需要模型 API key。
+4. 读取并选择一个已启用 Workspace 的 Agent，点击配对。0.3.1 会先读取本机服务状态；仅在尚未运行时调用原生重试接口启动已配置的本机服务，不重启运行中的服务，也不打开局域网发布。随后检查原生 Agent Card 并加密保存 A2A 连接凭据；不需要模型 API key。
 5. 回到协调器检查配对结果并测试连接，然后创建真实任务。配对不等于业务任务执行已经通过验证。
 
 目标 Agent 需由用户在原生设置中配置模型、默认工作目录并启用 Workspace。连接器不改变这些设置，不生成、轮换或显示 token，也不要求开放局域网访问。本机原生接口端口为 **43119**；43120 属于另一路局域网服务，不应混淆。AIMana 账号模型额度与 Agent 的本机连接凭据是不同概念。
+
+如果配对失败，连接插件会区分本机服务未启动、凭据不可读取、配对码过期和协调器不可达等原因。0.3.1 协调器的“检查配对结果”也会保留安全的错误码与说明，不再把这些失败统称为“未启用 Workspace”。更新插件文件后需在 AIMana++ 面板点“重载”；已生成的旧配对码不应继续使用。
 
 也可以手工添加 A2A 连接。支持粘贴完整 Agent Card URL，程序会移除末尾 `/.well-known/agent-card.json`。本机 endpoint 形如 `http://127.0.0.1:43119/a2a/v0.3/agents/<agentId>`。凭据通过 Windows `safeStorage` 加密保存。配对和 A2A 自动化测试使用本地 HTTP fixture，**尚未完成真实 AIMana 配对与执行联调**。
 

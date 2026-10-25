@@ -15,6 +15,12 @@ const methods = new Set([
   "workflow.start",
   "workflow.review",
 ]);
+class PairingFailure extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
 export async function startBridge(
   service,
   { root, saveSecret, aimanaPort = 43119 },
@@ -53,7 +59,10 @@ export async function startBridge(
           !equal(data.code, pairing.code) ||
           pairing.state !== "pending"
         ) {
-          reply(403, { error: "配对码无效或已过期，请生成新的配对码" });
+          reply(403, {
+            code: "expired_code",
+            error: "配对码无效或已过期，请生成新的配对码",
+          });
           return;
         }
         pairing.state = "processing";
@@ -65,33 +74,79 @@ export async function startBridge(
           !data.token ||
           data.token.length > 16000
         )
-          throw new Error("AIMana 连接信息不完整");
+          throw new PairingFailure(
+            "invalid_connection_details",
+            "AIMana 连接信息不完整，请重载连接插件",
+          );
         const endpoint = `http://127.0.0.1:${aimanaPort}/a2a/v0.3/agents/${encodeURIComponent(data.agentId)}`;
-        const check = await fetch(endpoint + "/.well-known/agent-card.json", {
-          headers: { Authorization: `Bearer ${data.token}` },
-          redirect: "error",
-          signal: AbortSignal.timeout(8000),
-        });
+        let check;
+        try {
+          check = await fetch(endpoint + "/.well-known/agent-card.json", {
+            headers: { Authorization: `Bearer ${data.token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(8000),
+          });
+        } catch {
+          throw new PairingFailure(
+            "card_unavailable",
+            "AIMana 本机接口 127.0.0.1:43119 未响应，请在 AIMana 连接插件中检查并启动本机服务",
+          );
+        }
         if (!check.ok)
-          throw new Error(`本机 AIMana Agent 验证失败：HTTP ${check.status}`);
-        const card = await check.json();
+          throw new PairingFailure(
+            check.status === 401 || check.status === 403
+              ? "card_unauthorized"
+              : check.status === 404
+                ? "agent_unavailable"
+                : "card_unavailable",
+            `AIMana Agent Card 返回 HTTP ${check.status}`,
+          );
+        let card;
+        try {
+          card = await check.json();
+        } catch {
+          throw new PairingFailure(
+            "invalid_card",
+            "AIMana 未返回有效 Agent Card",
+          );
+        }
         if (!card.name || !card.capabilities)
-          throw new Error("AIMana 未返回有效 Agent Card");
+          throw new PairingFailure(
+            "invalid_card",
+            "AIMana 未返回有效 Agent Card",
+          );
         if (!saveSecret)
-          throw new Error(
+          throw new PairingFailure(
+            "secure_storage_failed",
             "当前运行方式不支持加密保存配对凭据，请使用桌面客户端",
           );
-        const tokenRef = await saveSecret(data.token);
+        let tokenRef;
+        try {
+          tokenRef = await saveSecret(data.token);
+        } catch {
+          throw new PairingFailure(
+            "secure_storage_failed",
+            "Windows 安全存储未能加密保存连接凭据",
+          );
+        }
         const existing = service.store
           .connections()
           .find((c) => c.endpoint === endpoint);
-        const result = await service.handle("connection.save", {
-          id: existing?.id,
-          name: String(card.name).slice(0, 100),
-          kind: "a2a",
-          endpoint,
-          tokenRef,
-        });
+        let result;
+        try {
+          result = await service.handle("connection.save", {
+            id: existing?.id,
+            name: String(card.name).slice(0, 100),
+            kind: "a2a",
+            endpoint,
+            tokenRef,
+          });
+        } catch {
+          throw new PairingFailure(
+            "connection_save_failed",
+            "协调器未能保存连接，请检查该连接是否正在执行任务",
+          );
+        }
         pairing = {
           state: "paired",
           connectionId: result.id,
@@ -117,11 +172,23 @@ export async function startBridge(
       reply(200, { result: await service.handle(data.method, input) });
     } catch (error) {
       if (request.url === "/pair" && pairing?.state === "processing")
-        pairing = { state: "failed", expires: Date.now() + 120000 };
+        pairing = {
+          state: "failed",
+          failureCode:
+            error instanceof PairingFailure ? error.code : "pairing_failed",
+          error:
+            error instanceof PairingFailure
+              ? error.message
+              : "配对请求处理失败，请重载连接插件后重试",
+          expires: Date.now() + 120000,
+        };
       reply(400, {
+        ...(request.url === "/pair"
+          ? { code: pairing?.failureCode || "pairing_failed" }
+          : {}),
         error:
           request.url === "/pair"
-            ? "配对未完成。请确认 Agent 已启用 Workspace 并生成新的配对码重试。"
+            ? pairing?.error || "配对请求处理失败，请更新协调器与连接插件"
             : String(error.message).slice(0, 600),
       });
     }
@@ -156,6 +223,9 @@ export async function startBridge(
         state:
           !pairing || pairing.expires < Date.now() ? "expired" : pairing.state,
         connectionId: pairing?.connectionId,
+        ...(pairing?.state === "failed"
+          ? { code: pairing.failureCode, error: pairing.error }
+          : {}),
       };
     },
     async close() {
