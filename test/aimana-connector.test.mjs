@@ -12,6 +12,26 @@ test("AIMana connector reads native token only after explicit pairing and sends 
   const calls = [];
   let posts = 0;
   let running = false;
+  const ready = {
+    agentId: "enabled",
+    enabled: true,
+    updatedAtMs: 123,
+    projectPath: "C:/fixture",
+    model: "fixture-model",
+    hasToken: true,
+  };
+  let configs = [
+    ready,
+    { agentId: "disabled", enabled: false },
+    {
+      agentId: "unsaved",
+      enabled: true,
+      updatedAtMs: 0,
+      model: "",
+      projectPath: null,
+      hasToken: false,
+    },
+  ];
   const native = {
     ipcMain: { removeHandler() {} },
     ipcRenderer: {
@@ -25,10 +45,7 @@ test("AIMana connector reads native token only after explicit pairing and sends 
         }
         return method === "a2a:config:get"
           ? {
-              agents: [
-                { agentId: "enabled", enabled: true },
-                { agentId: "disabled", enabled: false },
-              ],
+              agents: configs,
             }
           : { token: "fixture-native-secret" };
       },
@@ -59,7 +76,9 @@ test("AIMana connector reads native token only after explicit pairing and sends 
       value: "",
       children: [],
       options: [],
-      setAttribute() {},
+      setAttribute(name, value) {
+        this[name] = value;
+      },
       append(...items) {
         this.children.push(...items);
         if (tag === "select") {
@@ -97,6 +116,10 @@ test("AIMana connector reads native token only after explicit pairing and sends 
     .onclick();
   assert.deepEqual(calls, ["a2a:config:get"]);
   assert.equal(root.children.find((e) => e.tag === "select").options.length, 1);
+  assert.match(
+    root.children.find((e) => e.tag === "ul").children[0].textContent,
+    /Workspace 尚未保存/,
+  );
   root.children.find((e) => e.tag === "input").value =
     "12345." + "a".repeat(36);
   await root.children.find((e) => e.textContent === "配对选中 Agent").onclick();
@@ -118,6 +141,40 @@ test("AIMana connector reads native token only after explicit pairing and sends 
     1,
     "already-running native service must not be restarted",
   );
+  // Config may be changed in the native editor after refreshing our selector.
+  // Recheck every prerequisite before starting services or revealing credentials.
+  for (const [patch, reason] of [
+    [{ enabled: false }, "Workspace 已关闭"],
+    [{ updatedAtMs: 0 }, "Workspace 尚未保存"],
+    [{ projectPath: null }, "未选择工作目录"],
+    [{ model: " " }, "未选择模型"],
+    [{ hasToken: false }, "未生成本机连接凭据"],
+  ]) {
+    configs = [ready];
+    await root.children
+      .find((e) => e.textContent === "读取已启用的 Agent")
+      .onclick();
+    root.children.find((e) => e.tag === "input").value =
+      "12345." + "c".repeat(36);
+    configs = [{ ...ready, ...patch }];
+    const count = calls.length;
+    await root.children
+      .find((e) => e.textContent === "配对选中 Agent")
+      .onclick();
+    assert.deepEqual(calls.slice(count), ["a2a:config:get"]);
+    assert.equal(posts, 2);
+    assert.match(
+      root.children.find((e) => e.role === "status").textContent,
+      new RegExp(reason),
+    );
+    await root.children
+      .find((e) => e.textContent === "读取已启用的 Agent")
+      .onclick();
+    assert.equal(
+      root.children.find((e) => e.tag === "select").options.length,
+      0,
+    );
+  }
   main.module.exports.stop();
   renderer.module.exports.stop();
 });

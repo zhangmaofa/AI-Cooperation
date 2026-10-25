@@ -1,6 +1,16 @@
 // User-initiated pairing only. No credential logging, persistence, or automatic token rotation.
 let cleanup;
-const CONNECTOR_BUILD = "0.3.2";
+const CONNECTOR_BUILD = "0.3.3";
+function workspaceIssue(agent) {
+  if (!agent?.enabled) return "Workspace 已关闭";
+  // AIMana 1.12.17 reports unsaved defaults as enabled, while its server
+  // starts only when a persisted configuration is enabled.
+  if (!(agent.updatedAtMs > 0)) return "Workspace 尚未保存";
+  if (!agent.projectPath?.trim()) return "未选择工作目录";
+  if (!agent.model?.trim()) return "未选择模型";
+  if (!agent.hasToken) return "未生成本机连接凭据";
+  return "";
+}
 function record(api, stage, code = "ok") {
   // Diagnostic records deliberately exclude agent IDs, pairing codes, tokens and raw errors.
   const entry = {
@@ -143,6 +153,9 @@ module.exports = {
         const text = document.createElement("p");
         text.textContent =
           "在协调器生成配对码，选择已启用 Workspace 的 Agent 后配对。使用现有账号额度；连接凭据自动加密保存。";
+        const setup = document.createElement("p");
+        setup.textContent =
+          "首次连接：在 AIMana 的 Agent 编辑页选择模型和工作目录，开启 Workspace 并保存。若开关已开但配置未保存或缺少凭据，先关闭并保存，再打开并保存，然后重新读取 Agent。";
         const code = document.createElement("input");
         code.placeholder = "粘贴 AI-Cooperation 配对码";
         code.setAttribute("aria-label", "AI-Cooperation 配对码");
@@ -154,22 +167,34 @@ module.exports = {
         pair.textContent = "配对选中 Agent";
         const status = document.createElement("p");
         status.setAttribute("role", "status");
+        const details = document.createElement("ul");
+        details.setAttribute("aria-label", "Agent 配置检查");
         refresh.onclick = async () => {
           try {
             record(api, "read-agents");
             const config = await ipcRenderer.invoke("a2a:config:get");
             agents.replaceChildren();
-            for (const agent of config.agents || [])
-              if (agent.enabled) {
+            details.replaceChildren();
+            let disabled = 0;
+            for (const agent of config.agents || []) {
+              const issue = workspaceIssue(agent);
+              if (!issue) {
                 const option = document.createElement("option");
                 option.value = agent.agentId;
                 option.textContent =
                   agent.name || agent.agentName || agent.agentId;
                 agents.append(option);
+              } else if (agent.enabled) {
+                const item = document.createElement("li");
+                item.textContent = `${agent.name || agent.agentName || agent.agentId}：${issue}`;
+                details.append(item);
+              } else {
+                disabled++;
               }
+            }
             status.textContent = agents.options.length
-              ? "请选择 Agent 并点击配对。"
-              : "没有已启用的 Agent。请先在 Agent 的 Workspace 设置中配置模型、工作目录并启用。";
+              ? "请选择已配置的 Agent 并点击配对。"
+              : `没有可配对的 Agent（${disabled} 个 Workspace 已关闭）。请先在 Agent 编辑页完成配置并保存；仅显示“已启用”不代表已完成配置。`;
           } catch {
             record(api, "read-agents", "failed");
             status.textContent =
@@ -193,13 +218,13 @@ module.exports = {
             stage = "read-agent-config";
             record(api, stage);
             const config = await ipcRenderer.invoke("a2a:config:get");
-            if (
-              !config.agents?.some(
-                (agent) => agent.agentId === agents.value && agent.enabled,
-              )
-            ) {
-              record(api, stage, "agent_disabled");
-              status.textContent = pairingErrors.agent_disabled;
+            const selected = config.agents?.find(
+              (agent) => agent.agentId === agents.value,
+            );
+            const issue = workspaceIssue(selected);
+            if (issue) {
+              record(api, stage, "workspace_not_ready");
+              status.textContent = `${issue}。请在 Agent 编辑页完成配置并保存，再重新读取 Agent。`;
               return;
             }
             status.textContent = "正在检查 AIMana 本机服务…";
@@ -276,7 +301,17 @@ module.exports = {
             pair.disabled = false;
           }
         };
-        root.append(version, text, code, agents, refresh, pair, status);
+        root.append(
+          version,
+          text,
+          setup,
+          code,
+          agents,
+          refresh,
+          pair,
+          status,
+          details,
+        );
         return () => {
           refresh.onclick = null;
           pair.onclick = null;

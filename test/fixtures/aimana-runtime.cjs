@@ -8,7 +8,24 @@ require(path.join(process.env.AIMANAPP_RUNTIME, "main.cjs"));
 let running = false;
 let retries = 0;
 ipcMain.handle("a2a:config:get", () => ({
-  agents: [{ agentId: "fixture-agent", enabled: true }],
+  agents: [
+    {
+      agentId: "unsaved-default",
+      enabled: true,
+      updatedAtMs: 0,
+      model: "",
+      projectPath: null,
+      hasToken: false,
+    },
+    {
+      agentId: "fixture-agent",
+      enabled: true,
+      updatedAtMs: 123,
+      model: "fixture-model",
+      projectPath: "C:/fixture",
+      hasToken: true,
+    },
+  ],
 }));
 ipcMain.handle("a2a:server:status", () => ({
   phase: running ? "running" : "stopped",

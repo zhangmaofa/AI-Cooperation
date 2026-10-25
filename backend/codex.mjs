@@ -43,7 +43,7 @@ export class CodexClient {
         clientInfo: {
           name: "ai_cooperation",
           title: "AI-Cooperation",
-          version: "0.3.2",
+          version: "0.3.3",
         },
       });
       this.send({ method: "initialized", params: {} });

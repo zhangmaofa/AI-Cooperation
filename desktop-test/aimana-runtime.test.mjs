@@ -37,7 +37,7 @@ test(
     const currentSource = await readFile(path.join(tweak, "index.js"), "utf8");
     await writeFile(
       path.join(tweak, "index.js"),
-      currentSource.replaceAll("0.3.2", "0.3.1-cache-test"),
+      currentSource.replaceAll("0.3.3", "0.3.1-cache-test"),
     );
     let received = 0;
     const server = createServer(async (request, response) => {
@@ -87,11 +87,11 @@ test(
       await writeFile(path.join(tweak, "index.js"), currentSource);
       await page.getByRole("button", { name: "重载", exact: true }).click();
       await page
-        .getByText("连接器 v0.3.2 · 主进程 / 面板版本一致", { exact: true })
+        .getByText("连接器 v0.3.3 · 主进程 / 面板版本一致", { exact: true })
         .waitFor();
       const logs = await readFile(path.join(root, "log", "main.log"), "utf8");
-      assert.match(logs, /connector 0\.3\.2 main loaded/);
-      assert.match(logs, /connector 0\.3\.2 renderer loaded/);
+      assert.match(logs, /connector 0\.3\.3 main loaded/);
+      assert.match(logs, /connector 0\.3\.3 renderer loaded/);
       assert.equal(logs.includes("runtime-fixture-only"), false);
       assert.match(logs, /native-service-status stopped/);
       assert.match(logs, /main paired ok/);

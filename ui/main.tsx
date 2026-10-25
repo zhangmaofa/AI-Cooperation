@@ -157,7 +157,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.3.2",
+    version: "0.3.3",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
