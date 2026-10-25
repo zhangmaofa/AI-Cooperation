@@ -1,5 +1,24 @@
 // User-initiated pairing only. No credential logging, persistence, or automatic token rotation.
 let cleanup;
+const CONNECTOR_BUILD = "0.3.2";
+function record(api, stage, code = "ok") {
+  // Diagnostic records deliberately exclude agent IDs, pairing codes, tokens and raw errors.
+  const entry = {
+    build: CONNECTOR_BUILD,
+    process: api.process,
+    stage,
+    code,
+    at: new Date().toISOString(),
+  };
+  try {
+    api.log?.info?.(
+      `connector ${CONNECTOR_BUILD} ${api.process} ${stage} ${code}`,
+    );
+  } catch {}
+  try {
+    api.storage?.set?.(`diagnostics-${api.process}`, entry);
+  } catch {}
+}
 const pairingErrors = {
   invalid_code: "配对码格式不正确，请完整复制协调器生成的配对码。",
   expired_code: "配对码已过期或已使用，请回协调器生成新码。",
@@ -33,11 +52,18 @@ function failure(code) {
 }
 module.exports = {
   start(api) {
+    record(api, "loaded");
     if (api.process === "main") {
       const channel = `aimanapp:t:${api.manifest.id}:pair`;
       const { ipcMain } = require("electron");
       ipcMain.removeHandler(channel);
+      ipcMain.removeHandler(`aimanapp:t:${api.manifest.id}:version`);
+      api.ipc.handle("version", () => ({
+        build: CONNECTOR_BUILD,
+        hasFetch: typeof fetch === "function",
+      }));
       api.ipc.handle("pair", async (_event, input) => {
+        record(api, "pair-request");
         // AIMana++ passes handler payload as the first argument; support both IPC wrappers.
         input ||= _event;
         const match = /^(\d{1,5})\.([a-f0-9]{36})$/.exec(input.code || "");
@@ -57,6 +83,7 @@ module.exports = {
             }),
           });
         } catch {
+          record(api, "pair-network", "coordinator_unreachable");
           return failure("coordinator_unreachable");
         }
         if (!response.ok) {
@@ -64,6 +91,13 @@ module.exports = {
           try {
             body = await response.json();
           } catch {}
+          record(
+            api,
+            "pair-response",
+            body?.code && pairingErrors[body.code]
+              ? body.code
+              : `http_${response.status}`,
+          );
           if (body?.code && pairingErrors[body.code]) return failure(body.code);
           return response.status === 403
             ? failure("expired_code")
@@ -72,9 +106,13 @@ module.exports = {
                 message: `协调器拒绝配对（HTTP ${response.status}）。请更新到 0.3.1 后生成新码查看具体原因。`,
               };
         }
+        record(api, "paired");
         return { ok: true };
       });
-      cleanup = () => ipcMain.removeHandler(channel);
+      cleanup = () => {
+        ipcMain.removeHandler(channel);
+        ipcMain.removeHandler(`aimanapp:t:${api.manifest.id}:version`);
+      };
       return;
     }
     const { ipcRenderer } = require("electron");
@@ -82,6 +120,26 @@ module.exports = {
       id: "cooperation",
       title: "AI-Cooperation 协作连接",
       render(root) {
+        record(api, "panel-rendered");
+        const version = document.createElement("p");
+        version.textContent = `连接器 v${CONNECTOR_BUILD} · 正在核对主进程版本…`;
+        api.ipc
+          .invoke("version")
+          .then((info) => {
+            version.textContent =
+              info?.build === CONNECTOR_BUILD
+                ? `连接器 v${CONNECTOR_BUILD} · 主进程 / 面板版本一致`
+                : `连接器 v${CONNECTOR_BUILD} · 主进程版本不同，请重载插件`;
+            record(
+              api,
+              "version-check",
+              info?.build === CONNECTOR_BUILD ? "matched" : "mismatched",
+            );
+          })
+          .catch(() => {
+            version.textContent = `连接器 v${CONNECTOR_BUILD} · 主进程未响应，请重载插件`;
+            record(api, "version-check", "unavailable");
+          });
         const text = document.createElement("p");
         text.textContent =
           "在协调器生成配对码，选择已启用 Workspace 的 Agent 后配对。使用现有账号额度；连接凭据自动加密保存。";
@@ -98,6 +156,7 @@ module.exports = {
         status.setAttribute("role", "status");
         refresh.onclick = async () => {
           try {
+            record(api, "read-agents");
             const config = await ipcRenderer.invoke("a2a:config:get");
             agents.replaceChildren();
             for (const agent of config.agents || [])
@@ -112,6 +171,7 @@ module.exports = {
               ? "请选择 Agent 并点击配对。"
               : "没有已启用的 Agent。请先在 Agent 的 Workspace 设置中配置模型、工作目录并启用。";
           } catch {
+            record(api, "read-agents", "failed");
             status.textContent =
               "无法读取 Agent。请检查 AIMana 版本和 Workspace 设置。";
           }
@@ -122,67 +182,101 @@ module.exports = {
             return;
           }
           pair.disabled = true;
+          let stage = "version-check";
           try {
+            const info = await api.ipc.invoke("version");
+            if (info?.build !== CONNECTOR_BUILD) {
+              record(api, stage, "mismatched");
+              status.textContent = `连接器 v${CONNECTOR_BUILD}：主进程版本未同步，配对未发送。`;
+              return;
+            }
+            stage = "read-agent-config";
+            record(api, stage);
             const config = await ipcRenderer.invoke("a2a:config:get");
             if (
               !config.agents?.some(
                 (agent) => agent.agentId === agents.value && agent.enabled,
               )
             ) {
+              record(api, stage, "agent_disabled");
               status.textContent = pairingErrors.agent_disabled;
               return;
             }
             status.textContent = "正在检查 AIMana 本机服务…";
+            stage = "native-service-status";
             const state = await ipcRenderer.invoke("a2a:server:status");
+            record(
+              api,
+              stage,
+              ["running", "stopped", "starting", "error"].includes(state?.phase)
+                ? state.phase
+                : "invalid",
+            );
             if (state?.phase !== "running") {
               status.textContent = "正在启动已配置的 AIMana 本机服务…";
               let restarted;
+              stage = "native-service-start";
               try {
                 restarted = await ipcRenderer.invoke("a2a:server:retry");
               } catch {
+                record(api, stage, "failed");
                 status.textContent = pairingErrors.service_unavailable;
                 return;
               }
               if (restarted?.phase !== "running") {
+                record(api, stage, "not_running");
                 status.textContent = pairingErrors.service_unavailable;
                 return;
               }
             }
             let secret;
+            stage = "native-credential";
             try {
               secret = await ipcRenderer.invoke(
                 "a2a:token:reveal",
                 agents.value,
               );
             } catch {
+              record(api, stage, "unavailable");
               status.textContent = pairingErrors.token_unavailable;
               return;
             }
             if (!secret?.token) {
+              record(api, stage, "missing");
               status.textContent = pairingErrors.missing_token;
               return;
             }
             status.textContent = "正在与协调器配对并加密保存连接…";
+            stage = "coordinator-pair";
+            record(api, stage);
             const result = await api.ipc.invoke("pair", {
               code: code.value.trim(),
               agentId: agents.value,
               token: secret.token,
             });
             if (!result?.ok) {
+              record(
+                api,
+                stage,
+                result?.code && pairingErrors[result.code]
+                  ? result.code
+                  : "failed",
+              );
               status.textContent =
                 result?.message || "连接插件返回不兼容，请重载插件后重试。";
               return;
             }
             code.value = "";
+            record(api, "paired");
             status.textContent = "配对成功，可以回 AI-Cooperation 派发任务。";
           } catch {
-            status.textContent =
-              "无法完成配对调用。请重载 AIMana++ 连接插件，并确认 AIMana 原生 Workspace 接口可用。";
+            record(api, stage, "native-call-failed");
+            status.textContent = `连接器 v${CONNECTOR_BUILD}：${stage} 调用失败；诊断已记录到连接插件日志。`;
           } finally {
             pair.disabled = false;
           }
         };
-        root.append(text, code, agents, refresh, pair, status);
+        root.append(version, text, code, agents, refresh, pair, status);
         return () => {
           refresh.onclick = null;
           pair.onclick = null;

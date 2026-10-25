@@ -89,7 +89,7 @@ test("AIMana connector reads native token only after explicit pairing and sends 
         return { unregister() {} };
       },
     },
-    ipc: { invoke: (channel, payload) => handlers.get(channel)(payload) },
+    ipc: { invoke: async (channel, payload) => handlers.get(channel)(payload) },
   });
   assert.deepEqual(calls, []);
   await root.children

@@ -62,7 +62,7 @@ export class AcpClient {
       });
       this.info = await this.request("initialize", {
         protocolVersion: 1,
-        clientInfo: { name: "ai-cooperation", version: "0.3.1" },
+        clientInfo: { name: "ai-cooperation", version: "0.3.2" },
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,

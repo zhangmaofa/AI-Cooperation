@@ -13,6 +13,7 @@ const { fork } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { installConnector } = require("./connector.cjs");
 
 let window,
   worker,
@@ -222,30 +223,7 @@ else {
               process.env.LOCALAPPDATA || app.getPath("userData"),
               ".aimana-plusplus",
             );
-            if (!fs.existsSync(path.join(runtime, "runtime")))
-              throw new Error("未检测到 AIMana++ runtime，请先安装 AIMana++");
-            const destination = path.resolve(
-              runtime,
-              "tweaks",
-              "com.zhangmaofa.ai-cooperation",
-            );
-            if (
-              !destination.startsWith(
-                path.resolve(runtime, "tweaks") + path.sep,
-              )
-            )
-              throw new Error("插件目录无效");
-            fs.mkdirSync(destination, { recursive: true });
-            for (const name of ["manifest.json", "index.js"])
-              fs.copyFileSync(
-                path.join(root, "connectors", "aimana", name),
-                path.join(destination, name),
-              );
-            return {
-              message:
-                "连接插件已安装。请在 AIMana++ 面板重载插件；如未发现，请保存工作后重启 AIMana。",
-              path: destination,
-            };
+            return installConnector(root, runtime);
           }
           if (method === "connection.save") {
             if (data.token && typeof data.token !== "string")
