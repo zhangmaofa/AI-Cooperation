@@ -34,5 +34,8 @@ export function clearDraft(keyPrefix: string) {
   try {
     for (const key of Object.keys(localStorage))
       if (key.startsWith(prefix + keyPrefix)) localStorage.removeItem(key);
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }

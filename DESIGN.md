@@ -163,9 +163,9 @@ UI 连接只接收脱敏元数据与用户需要的产物。token 通过凭据�
 
 ## 10. 当前证据与未完成部分
 
-项目独立源码位于 `E:\AI-Cooperation`，远端为 `https://github.com/zhangmaofa/AI-Cooperation`。现有 Agent Relay 内核采用 JavaScript ESM 与 JSON 文件持久化；还没有 Electron、React、Fastify、SQLite 或正式调度队列。后续按本文选型逐步迁移，不应把本文视为上述依赖已经安装。
+项目独立源码位于 `E:\AI-Cooperation`，远端为 `https://github.com/zhangmaofa/AI-Cooperation`。当前为 0.6.0 桌面预览版：Electron 主进程与独立 Node 后台通过 IPC 通信，React/TypeScript/Vite 提供界面，SQLite WAL 保存任务、计划、消息及偏好设置。已实现依赖调度、并发上限、工作区锁、暂停新工作、独立验证、主控答疑和总体审核；JSON 原型保留兼容入口。跨应用 MCP 和配对使用经过鉴权的本机 HTTP 通道。
 
-上次验证：八项测试通过，覆盖 MCP stdio 握手、疑问答复、原 context 返工、证据要求、未知交付不重发、错误会话和轮次耗尽等路径；另有确定性 demo。未完成真实 Codex→AIMana→审核返工联调；十实例调度与桌面原会话自动唤醒仍未实现。
+当前回归覆盖 47 项内核/协议测试与 9 项桌面测试（含打包程序启动），覆盖原会话返工、未知交付不重发、依赖失效后重验、计划持久化、主题与字体设置等路径。AIMana 普通 Cowork 桥在隔离的已安装框架运行时中通过测试，真实用户账号配对和模型执行仍待联调；不能以协议 fixture 替代真实闭环。十实例真实负载、已有桌面聊天接管与空闲自动唤醒仍未验证或实现。
 
 ## 参考
 

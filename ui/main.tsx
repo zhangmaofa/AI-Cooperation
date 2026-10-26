@@ -11,8 +11,14 @@ import {
   AimannaProfile,
   McpIntegration,
 } from "./collaboration";
+import "./theme.css";
 import "./style.css";
 import { useDraftState, clearDraft } from "./drafts";
+import {
+  AppearanceSettings,
+  applyPreferences,
+  cachePreferences,
+} from "./preferences";
 
 const api = window.cooperation;
 const statusNames: Record<string, string> = {
@@ -159,7 +165,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.5.0",
+    version: "0.6.0",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -170,6 +176,17 @@ function App() {
   const [notice, setNotice] = useState("");
   const [offline, setOffline] = useState(false);
   const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (state.preferences) {
+      applyPreferences(state.preferences);
+      cachePreferences(state.preferences);
+    }
+  }, [
+    state.preferences?.mode,
+    state.preferences?.accent,
+    state.preferences?.fontScale,
+    state.preferences?.notifications,
+  ]);
   useEffect(() => {
     api
       .request<Snapshot>("snapshot")
@@ -608,6 +625,7 @@ function App() {
                   <p>本机运行，状态持久保存。</p>
                 </div>
               </div>
+              <AppearanceSettings state={state} call={call} />
               <section className="panel settings-panel">
                 <h2>运行与存储</h2>
                 <div className="setting-row">

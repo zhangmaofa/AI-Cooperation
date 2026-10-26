@@ -93,6 +93,7 @@ export interface Connection {
   hasToken?: boolean;
 }
 export interface Snapshot {
+  preferences?: import("./preferences").Preferences;
   workflows?: Workflow[];
   messages?: {
     id: string;

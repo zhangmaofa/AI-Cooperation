@@ -16,6 +16,7 @@ import { workspacePath } from "./workspace.mjs";
 import { AcpClient } from "./acp.mjs";
 import { Workflows } from "./workflows.mjs";
 import { CoworkClient } from "../src/cowork.mjs";
+import { preferenceSchema, preferences } from "./preferences.mjs";
 
 const text = z.string().trim().min(1).max(20000);
 const planSchema = z.object({
@@ -108,8 +109,9 @@ export class DesktopService {
         .filter((m) => m.direction === "coordinator"),
       workflows: this.store.workflows(),
       scheduler: this.collaboration.settings(),
+      preferences: preferences(this.store),
       database: this.store.path,
-      version: "0.5.0",
+      version: "0.6.0",
     };
   }
   changed() {
@@ -714,6 +716,12 @@ export class DesktopService {
   }
   async handle(method, data = {}) {
     if (method === "snapshot") return this.snapshot();
+    if (method === "preferences.save") {
+      const value = preferenceSchema.parse(data);
+      this.store.setSetting("preferences", value);
+      this.changed();
+      return value;
+    }
     if (method === "workflow.analyze") return this.workflows.analyze(data);
     if (method === "workflow.create") return this.workflows.create(data);
     if (method === "workflow.preflight") return this.workflows.preflight(data);

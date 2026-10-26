@@ -43,6 +43,17 @@ test(
       await page
         .getByRole("heading", { name: "本机 Codex", exact: true })
         .waitFor();
+      await page.getByRole("button", { name: /设置与说明/ }).click();
+      await page.getByLabel("明暗模式").selectOption("dark");
+      await page.getByRole("button", { name: "海洋蓝" }).click();
+      await page.getByLabel("字体大小").selectOption("1.3");
+      await page.getByRole("button", { name: "保存设置", exact: true }).click();
+      await page.getByText("设置已保存", { exact: true }).waitFor();
+      const settings = await page.evaluate(() =>
+        window.cooperation.request("snapshot"),
+      );
+      assert.equal(settings.preferences.accent, "blue");
+      assert.equal(settings.preferences.fontScale, 1.3);
       await mkdir("outputs", { recursive: true });
       await page.screenshot({
         path: path.resolve("outputs", "desktop-packaged.png"),

@@ -7,7 +7,7 @@ const labels = {
   stalled: "协作已暂停，需要核对",
 };
 exports.notices = function (previous, next) {
-  if (!previous) return [];
+  if (!previous || next.preferences?.notifications === false) return [];
   const old = new Map(previous.tasks.map((t) => [t.id, t]));
   const signature = (t) =>
     `${t?.status}:${t?.remoteTaskId || ""}:${t?.rounds || 0}:${!!t?.userQuestion}:${!!t?.automationError}`;

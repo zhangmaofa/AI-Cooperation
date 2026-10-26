@@ -8,6 +8,7 @@ const {
   dialog,
   shell,
   Notification,
+  nativeTheme,
 } = require("electron");
 const { fork } = require("node:child_process");
 const fs = require("node:fs");
@@ -21,6 +22,14 @@ let window,
   tray,
   quitting = false,
   latest;
+let previewMode;
+function applyNativeTheme(mode) {
+  if (nativeTheme.themeSource !== mode) nativeTheme.themeSource = mode;
+  if (window && !window.isDestroyed())
+    window.setBackgroundColor(
+      nativeTheme.shouldUseDarkColors ? "#141b23" : "#f6f8fa",
+    );
+}
 let sequence = 0;
 const requests = new Map();
 const notifications = new Set();
@@ -149,6 +158,9 @@ else {
           }
         }
         if (message.type === "ready" || message.type === "snapshot") {
+          const mode = message.snapshot.preferences?.mode || "system";
+          if (previewMode === mode) previewMode = undefined;
+          applyNativeTheme(previewMode || mode);
           if (!process.env.AICO_TEST && Notification.isSupported()) {
             for (const item of notices(latest, message.snapshot)) {
               try {
@@ -222,6 +234,8 @@ else {
         "task.create",
         "task.action",
         "scheduler.save",
+        "preferences.save",
+        "preferences.preview",
         "workflow.analyze",
         "workflow.create",
         "workflow.preflight",
@@ -238,6 +252,14 @@ else {
         async (event, method, data = {}) => {
           if (event.sender !== window?.webContents || !allowed.has(method))
             throw new Error("不支持的操作");
+          if (method === "preferences.preview") {
+            if (!["system", "light", "dark"].includes(data.mode))
+              throw new Error("无效的明暗模式");
+            previewMode =
+              data.mode === latest?.preferences?.mode ? undefined : data.mode;
+            applyNativeTheme(data.mode);
+            return true;
+          }
           if (method === "integration.info")
             return {
               mcp: {
