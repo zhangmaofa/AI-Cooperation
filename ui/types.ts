@@ -10,6 +10,8 @@ export interface Task {
   nodeId?: string;
   dependsOn?: string[];
   queueReason?: string;
+  queueBlockers?: string[];
+  automationError?: string;
   userQuestion?: string;
   usedTokens?: number;
   verifications?: {
@@ -128,11 +130,18 @@ export interface WorkflowNode {
 export interface Workflow {
   id: string;
   goal: string;
+  coordinatorId: string;
+  threadId: string;
   acceptance: string[];
   nodes: WorkflowNode[];
   taskIds: string[];
   status: string;
   lastError?: string;
+  running?: boolean;
+  paused?: boolean;
+  automationPaused?: boolean;
+  autoReview?: boolean;
+  queueReason?: string;
   reviews: { decision: string; feedback: string; evidence: string[] }[];
 }
 declare global {
@@ -141,6 +150,10 @@ declare global {
       request<T = unknown>(method: string, data?: unknown): Promise<T>;
       subscribe(callback: (snapshot: Snapshot) => void): () => void;
       onOffline(callback: () => void): () => void;
+      onNavigate(
+        callback: (value: { page: string; id: string }) => void,
+      ): () => void;
+      onWarning(callback: (message: string) => void): () => void;
       pickDirectory(): Promise<string | null>;
       openData(): Promise<void>;
       quit(): Promise<void>;

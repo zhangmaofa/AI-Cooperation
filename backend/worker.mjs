@@ -69,11 +69,20 @@ process.on("message", async (message) => {
   }
 });
 let ticking = false;
+let warned = false;
 const timer = setInterval(async () => {
   if (ticking) return;
   ticking = true;
   try {
     await service.tick();
+    warned = false;
+  } catch {
+    if (!warned)
+      send({
+        type: "warning",
+        message: "后台调度暂时失败，任务和原会话已保留，请检查协作状态。",
+      });
+    warned = true;
   } finally {
     ticking = false;
   }

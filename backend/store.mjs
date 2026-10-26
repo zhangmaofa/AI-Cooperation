@@ -181,6 +181,16 @@ export class Store {
       )
       .run(workflow.id, JSON.stringify(workflow));
   }
+  rollbackWorkflow(id, taskIds) {
+    this.db.transaction(() => {
+      for (const taskId of taskIds) {
+        this.db.prepare("DELETE FROM messages WHERE task_id=?").run(taskId);
+        this.db.prepare("DELETE FROM events WHERE task_id=?").run(taskId);
+        this.db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);
+      }
+      this.db.prepare("DELETE FROM workflows WHERE id=?").run(id);
+    })();
+  }
 }
 
 export class SqliteRelay extends Relay {

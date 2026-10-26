@@ -67,7 +67,7 @@ test(
       await page.locator("#aimanapp-panel").waitFor({ state: "attached" });
       await page.keyboard.press("Control+Alt+u");
       await page
-        .getByText("连接器 v0.4.0 · 普通 Cowork", { exact: true })
+        .getByText("连接器 v0.5.0 · 普通 Cowork", { exact: true })
         .waitFor();
       const pair = bridge.startPairing();
       await page.getByLabel("AI-Cooperation 配对码").fill(pair.code);
@@ -156,6 +156,11 @@ test(
       );
       task = await service.action(task.id, "poll");
       assert.equal(task.status, "needs_user");
+      await service.action(task.id, "open-session");
+      assert.equal(
+        (await app.evaluate(() => global.fixture.snapshot())).opened,
+        sessionId,
+      );
       await app.evaluate(
         (_e, id) => global.fixture.permission(id, false),
         sessionId,
@@ -169,7 +174,11 @@ test(
         sessionId,
       );
       task = await until(
-        () => service.action(task.id, "poll"),
+        async () => {
+          await service.tick();
+          await service.drainBackground();
+          return service.store.task(task.id);
+        },
         (t) => t.status === "pending_review",
       );
       task = await service.action(task.id, "review", {

@@ -182,6 +182,9 @@ export class Relay {
           : undefined,
         instruction:
           "Execute the assigned plan. Report actual changed files/artifacts and verification evidence. Ask the coordinator when task information is missing. Only the coordinator can accept the result. Do not expand the authorized scope.",
+        dependencies: task.dependencyContext?.length
+          ? task.dependencyContext
+          : undefined,
         feedback:
           task.reviews.at(-1)?.decision === "revise"
             ? task.reviews.at(-1).feedback

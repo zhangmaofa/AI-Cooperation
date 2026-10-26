@@ -119,19 +119,24 @@ export class Collaboration {
   async beforeDispatch(task) {
     if (!["ready", "queued", "revision_ready"].includes(task.status))
       throw new Error(`Cannot dispatch from ${task.status}`);
-    if (task.rounds >= task.maxRounds) throw new Error("执行轮次已耗尽，不能继续派发");
+    if (task.rounds >= task.maxRounds)
+      throw new Error("执行轮次已耗尽，不能继续派发");
     const tasks = this.s.store.tasks();
     const settings = this.settings();
     const peers = tasks.filter(
       (t) => t.id !== task.id && !terminal.has(t.status),
     );
     let reason;
+    const blockers = new Set();
     if (
       (task.dependsOn || []).some(
         (id) => this.s.store.task(id).status !== "accepted",
       )
-    )
+    ) {
       reason = "等待前置子任务验收";
+      for (const id of task.dependsOn || [])
+        if (this.s.store.task(id).status !== "accepted") blockers.add(id);
+    }
     const running = peers.filter(
       (t) => t.dispatching || ["sending", "working"].includes(t.status),
     );
@@ -145,16 +150,17 @@ export class Collaboration {
     )
       reason = "等待执行 Agent 空闲";
     let workspace = task.executor.cwd || task.workspace;
-    if (
-      peers.some(
-        (t) =>
-          t.lease &&
-          (overlaps(workspace, t.lease.workspace) ||
-            ((!workspace || !t.lease.workspace) &&
-              task.executor.connectionId === t.lease.connectionId)),
-      )
-    )
+    const owners = peers.filter(
+      (t) =>
+        t.lease &&
+        (overlaps(workspace, t.lease.workspace) ||
+          ((!workspace || !t.lease.workspace) &&
+            task.executor.connectionId === t.lease.connectionId)),
+    );
+    if (owners.length) {
       reason = "等待工作区写入锁（含待审核与需核对任务）";
+      for (const owner of owners) blockers.add(owner.id);
+    }
     if (
       [...this.reservations.values()].some(
         (r) =>
@@ -175,9 +181,28 @@ export class Collaboration {
     )
       reason = "等待总体审核完成，工作区暂时只读核对";
     if (reason) {
+      if (task.workflowId && !this.s.automationEnabled(task))
+        reason = "协作计划已暂停，请先继续计划";
+      const ids = [...blockers].sort();
+      const changed =
+        task.status !== "queued" ||
+        task.queueReason !== reason ||
+        JSON.stringify(task.queueBlockers || []) !== JSON.stringify(ids);
       task.status = "queued";
       task.queueReason = reason;
-      this.save(task, "queued", reason);
+      task.queueBlockers = ids;
+      if (changed) this.save(task, "queued", reason);
+      return false;
+    }
+    if (task.workflowId && !this.s.automationEnabled(task)) {
+      if (
+        task.status !== "queued" ||
+        task.queueReason !== "协作计划已暂停，请先继续计划"
+      ) {
+        task.status = "queued";
+        task.queueReason = "协作计划已暂停，请先继续计划";
+        this.save(task, "queued", task.queueReason);
+      }
       return false;
     }
     this.reservations.set(task.id, {
@@ -200,6 +225,26 @@ export class Collaboration {
       }
       task.status = task.rounds ? "revision_ready" : "ready";
       task.queueReason = null;
+      task.queueBlockers = [];
+      task.automationError = null;
+      const dependencies = (task.dependsOn || []).map((id) =>
+        this.s.store.task(id),
+      );
+      const reportLimit = Math.min(
+        2000,
+        Math.floor(12000 / Math.max(dependencies.length, 1)),
+      );
+      task.dependencyContext = dependencies.map((t) => ({
+        id: t.nodeId || t.id,
+        goal: t.goal.slice(0, 400),
+        workspace: t.executor.cwd || t.workspace,
+        report: (t.result?.text || "").slice(0, reportLimit),
+        acceptedRound: t.rounds,
+        verification: t.verifications
+          ?.at(-1)
+          ?.checks.map((c) => ({ command: c.command, passed: c.passed }))
+          .slice(0, 5),
+      }));
       task.lease = { workspace, connectionId: task.executor.connectionId };
       task.dispatching = true;
       if (workspace && task.mode === "real") {
@@ -446,7 +491,8 @@ export class Collaboration {
       task.rounds > 1 &&
       current?.complete &&
       task.roundStart?.complete &&
-      current.hash === task.roundStart.hash;
+      current.hash === task.roundStart.hash &&
+      task.revalidationRound !== task.rounds;
     const previous = task.reviews.at(-2),
       latest = task.reviews.at(-1);
     const repeated =
@@ -465,14 +511,30 @@ export class Collaboration {
     }
   }
   async tick() {
+    if (this.s.mutationDepth) return;
+    const schedule = (task, action) =>
+      this.s.background(`auto:${task.id}`, async () => {
+        try {
+          await this.s.action(task.id, action);
+        } catch (error) {
+          if (this.s.closed) return;
+          const current = this.s.store.task(task.id);
+          current.automationError = error.message;
+          if (["queued", "ready", "revision_ready"].includes(current.status))
+            current.status = "stalled";
+          this.save(current, "automation_error", error.message);
+          this.s.changed();
+        }
+      });
     for (const task of this.s.store
       .tasks()
       .sort((a, b) =>
         (a.events[0]?.at || "").localeCompare(b.events[0]?.at || ""),
       )) {
       if (this.s.closed) return;
+      if (!this.s.automationEnabled(task)) continue;
       if (task.status === "queued" && !this.s.inFlight.has(task.id))
-        await this.s.action(task.id, "dispatch").catch(() => {});
+        schedule(task, "dispatch");
       if (
         task.status === "needs_input" &&
         task.contract?.autoAnswer &&
@@ -481,7 +543,7 @@ export class Collaboration {
           .some((m) => m.kind === "question" && m.state === "pending") &&
         !this.s.inFlight.has(task.id)
       )
-        await this.s.action(task.id, "coordinator-answer").catch(() => {});
+        schedule(task, "coordinator-answer");
       if (
         task.status === "pending_review" &&
         task.autoReview &&
@@ -490,14 +552,23 @@ export class Collaboration {
           .some((m) => m.kind === "report" && m.state === "pending") &&
         !this.s.inFlight.has(task.id)
       )
-        await this.s.action(task.id, "codex-review").catch(() => {});
+        schedule(task, "codex-review");
     }
     for (const workflow of this.s.store.workflows()) {
+      try {
+        this.s.workflows.validateStored(workflow);
+      } catch (error) {
+        workflow.status = "needs_attention";
+        workflow.automationPaused = true;
+        workflow.lastError = error.message;
+        this.s.store.saveWorkflow(workflow);
+        continue;
+      }
       if (
         !workflow.running ||
         this.s.workflows.busy.has(workflow.id) ||
         ["accepted", "budget_exhausted"].includes(workflow.status) ||
-        (workflow.lastError && !workflow.autoReview)
+        workflow.automationPaused
       )
         continue;
       const tasks = workflow.taskIds.map((id) => this.s.store.task(id));
@@ -522,14 +593,9 @@ export class Collaboration {
         workflow.autoReview &&
         !this.s.workflows.busy.has(workflow.id)
       ) {
-        try {
-          await this.s.workflows.review(workflow.id);
-        } catch (error) {
-          workflow.status = "needs_attention";
-          workflow.autoReview = false;
-          workflow.lastError = error.message;
-          this.s.store.saveWorkflow(workflow);
-        }
+        this.s.background(`workflow:${workflow.id}`, () =>
+          this.s.workflows.review(workflow.id),
+        );
       }
     }
   }

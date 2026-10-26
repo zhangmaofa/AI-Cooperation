@@ -115,6 +115,7 @@ test("overall verification failure returns the original child to rework before a
         },
       ],
     });
+    service.workflows.start(workflow.id);
     let task = await settle(
       service,
       await service.action(workflow.taskIds[0], "dispatch"),
@@ -191,6 +192,7 @@ test("overall review locks its workspaces and refuses artifacts changed during r
         },
       ],
     });
+    service.workflows.start(workflow.id);
     const child = await settle(
       service,
       await service.action(workflow.taskIds[0], "dispatch"),
@@ -320,9 +322,11 @@ test("scheduler holds overlapping workspace leases through review and admits que
     assert.match(second.queueReason, /工作区/);
     first = await settle(service, first);
     await service.tick();
+    await service.drainBackground();
     assert.equal(service.store.task(second.id).status, "queued");
     await service.action(first.id, "review", accept);
     await service.tick();
+    await service.drainBackground();
     assert.equal(service.store.task(second.id).status, "working");
   } finally {
     service.close();
@@ -473,6 +477,7 @@ test("question is persisted once, original coordinator answers, and worker resum
       1,
     );
     await service.tick();
+    await service.drainBackground();
     task = await settle(service, service.store.task(task.id));
     assert.equal(task.status, "pending_review");
     assert.equal(questions, 1);
@@ -528,7 +533,9 @@ test("user decisions remain pending instead of repeated automatic main calls", a
     });
     task = await settle(service, await service.action(task.id, "dispatch"));
     await service.tick();
+    await service.drainBackground();
     await service.tick();
+    await service.drainBackground();
     assert.equal(questions, 1);
     assert.equal(service.store.task(task.id).status, "needs_input");
     assert.match(service.store.task(task.id).userQuestion, /external account/);
@@ -682,6 +689,7 @@ test("invalid dependency graph is rejected; two worker fixtures create actual ar
       i++
     ) {
       await service.tick();
+      await service.drainBackground();
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(service.workflows.get(workflow.id).status, "accepted");

@@ -12,7 +12,7 @@ export async function startDesktopMcp() {
     path.join(process.env.LOCALAPPDATA || os.homedir(), "AI-Cooperation");
   const server = new McpServer({
     name: "ai-cooperation-desktop",
-    version: "0.4.1",
+    version: "0.5.0",
   });
   async function rpc(method, data) {
     const bridge = JSON.parse(
@@ -131,6 +131,7 @@ export async function startDesktopMcp() {
     {
       ...common,
       action: z.enum([
+        "retry",
         "dispatch",
         "poll",
         "answer",

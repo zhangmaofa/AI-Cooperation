@@ -58,4 +58,7 @@ export class CoworkClient {
   cancel(id) {
     return this.rpc("cancel", { id });
   }
+  open(id) {
+    return this.rpc("open", { id });
+  }
 }

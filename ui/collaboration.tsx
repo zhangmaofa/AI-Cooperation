@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useDraftState } from "./drafts";
 import type {
   Connection,
   Contract,
@@ -181,10 +182,34 @@ export function TaskTools({ task, call }: { task: Task; call: Call }) {
       {task.queueReason && task.status === "queued" && (
         <p className="warning">{task.queueReason}</p>
       )}
+      {task.automationError && (
+        <p className="warning">自动协作暂停：{task.automationError}</p>
+      )}
       {task.userQuestion && task.status === "needs_input" && (
         <p className="warning">主控需要你确认：{task.userQuestion}</p>
       )}
       <div className="button-row">
+        {task.executor.type === "aimana" &&
+          (task.remoteTaskId || task.status === "delivery_unknown") && (
+            <button
+              className="secondary"
+              disabled={busy || task.busy}
+              onClick={() => act("open-session")}
+            >
+              打开 AIMana 原会话
+            </button>
+          )}
+        {task.status === "failed" &&
+          task.contextId &&
+          task.rounds < task.maxRounds && (
+            <button
+              className="secondary"
+              disabled={busy || task.busy}
+              onClick={() => act("retry")}
+            >
+              重试已失败的原会话
+            </button>
+          )}
         {task.status === "needs_input" && task.coordinatorId && (
           <button
             className="secondary"
@@ -610,6 +635,7 @@ export function AimannaProfile({
 }
 
 const workflowStatus: Record<string, string> = {
+  paused: "已暂停新工作",
   reviewing: "正在审核整体",
   draft: "待开工",
   working: "协作中",
@@ -644,20 +670,66 @@ export function WorkflowPage({
   call: Call;
   openTask: (id: string) => void;
 }) {
-  const [goal, setGoal] = useState("");
-  const [workspace, setWorkspace] = useState("");
-  const [coordinatorId, setCoordinator] = useState(
+  const [goal, setGoal] = useDraftState("workflow.goal", "");
+  const [workspace, setWorkspace] = useDraftState("workflow.workspace", "");
+  const [coordinatorId, setCoordinator] = useDraftState(
+    "workflow.coordinator",
     state.connections.find((c) => c.kind === "codex")?.id || "",
   );
-  const [draft, setDraft] = useState<{
+  const [draft, setDraft] = useDraftState<{
     nodes: WorkflowNode[];
     acceptance: string[];
     threadId: string;
     goal: string;
     coordinatorId: string;
-  } | null>(null);
+  } | null>(
+    "workflow.plan",
+    null,
+    (v) =>
+      v === null ||
+      (typeof v === "object" &&
+        v !== null &&
+        Array.isArray((v as { nodes?: unknown }).nodes) &&
+        typeof (v as { threadId?: unknown }).threadId === "string"),
+  );
   const [busy, setBusy] = useState(false);
-  const [autoReview, setAuto] = useState(true);
+  const [autoReview, setAuto] = useDraftState("workflow.auto", true);
+  const [maxRounds, setMaxRounds] = useDraftState("workflow.rounds", 5);
+  const [checkConnections, setCheckConnections] = useState(false);
+  const [inboxFilter, setInboxFilter] = useState("attention");
+  const [readiness, setReadiness] = useState<{
+    ok: boolean;
+    issues: { nodeId: string; message: string; level: string }[];
+  } | null>(null);
+  useEffect(() => setReadiness(null), [draft, autoReview, workspace]);
+  const prepared = draft && {
+    ...draft,
+    nodes: draft.nodes.map((n) => ({
+      ...n,
+      workspace: n.workspace?.trim() || workspace || undefined,
+    })),
+    autoReview,
+    maxRounds,
+  };
+  const editNode = (index: number, patch: Partial<WorkflowNode>) => {
+    if (draft)
+      setDraft({
+        ...draft,
+        nodes: draft.nodes.map((n, i) =>
+          i === index ? { ...n, ...patch } : n,
+        ),
+      });
+  };
+  async function preflight() {
+    if (!prepared) return;
+    setBusy(true);
+    const result = await call<NonNullable<typeof readiness>>(
+      "workflow.preflight",
+      { ...prepared, checkConnections },
+    );
+    if (result) setReadiness(result);
+    setBusy(false);
+  }
   async function analyze() {
     setBusy(true);
     const result = await call<{
@@ -671,11 +743,7 @@ export function WorkflowPage({
   async function create() {
     if (!draft) return;
     setBusy(true);
-    const result = await call("workflow.create", {
-      ...draft,
-      autoReview,
-      maxRounds: 5,
-    });
+    const result = await call("workflow.create", prepared);
     if (result) {
       setDraft(null);
       setGoal("");
@@ -762,24 +830,89 @@ export function WorkflowPage({
         </button>
         <p className="hint">
           生成计划会使用模型额度。计划创建后再点击开工。同一目录自动串行，独立目录才可并行。
+          草稿自动保存在本机，切换页面或重启后可继续编辑。
         </p>
         {draft && (
           <div className="workflow-draft">
             <h3>检查子任务与执行器</h3>
             {draft.nodes.map((node, index) => (
               <article className="workflow-node" key={node.id}>
-                <strong>
-                  {node.id} · {node.goal}
-                </strong>
-                <p className="hint">
-                  前置任务：{node.dependsOn.join("、") || "无"}
-                </p>
-                <ol>
-                  {node.plan.map((step, i) => (
-                    <li key={i}>{step}</li>
-                  ))}
-                </ol>
-                <p>验收：{node.acceptance.join("；")}</p>
+                <div className="section-title">
+                  <strong>{node.id}</strong>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        nodes: draft.nodes
+                          .filter((_, i) => i !== index)
+                          .map((n) => ({
+                            ...n,
+                            dependsOn: n.dependsOn.filter(
+                              (id) => id !== node.id,
+                            ),
+                          })),
+                      })
+                    }
+                  >
+                    删除 {node.id}
+                  </button>
+                </div>
+                <label>
+                  子目标
+                  <input
+                    aria-label={`${node.id} 子目标`}
+                    value={node.goal}
+                    onChange={(e) => editNode(index, { goal: e.target.value })}
+                  />
+                </label>
+                <div className="form-two">
+                  <label>
+                    执行步骤（每行一项）
+                    <textarea
+                      aria-label={`${node.id} 步骤`}
+                      value={node.plan.join("\n")}
+                      onChange={(e) =>
+                        editNode(index, { plan: e.target.value.split("\n") })
+                      }
+                    />
+                  </label>
+                  <label>
+                    验收标准（每行一项）
+                    <textarea
+                      aria-label={`${node.id} 验收`}
+                      value={node.acceptance.join("\n")}
+                      onChange={(e) =>
+                        editNode(index, {
+                          acceptance: e.target.value.split("\n"),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <label>
+                  前置依赖（按 Ctrl 可多选；空选表示可独立执行）
+                  <select
+                    multiple
+                    aria-label={`${node.id} 前置依赖`}
+                    value={node.dependsOn}
+                    onChange={(e) =>
+                      editNode(index, {
+                        dependsOn: Array.from(e.target.selectedOptions).map(
+                          (o) => o.value,
+                        ),
+                      })
+                    }
+                  >
+                    {draft.nodes
+                      .filter((n) => n.id !== node.id)
+                      .map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.id} · {n.goal}
+                        </option>
+                      ))}
+                  </select>
+                </label>
                 <div className="form-two">
                   <label>
                     执行 Agent
@@ -791,7 +924,14 @@ export function WorkflowPage({
                           ...draft,
                           nodes: draft.nodes.map((n, i) =>
                             i === index
-                              ? { ...n, connectionId: e.target.value }
+                              ? {
+                                  ...n,
+                                  connectionId: e.target.value,
+                                  workspace:
+                                    state.connections.find(
+                                      (c) => c.id === e.target.value,
+                                    )?.cwd || n.workspace,
+                                }
                               : n,
                           ),
                         })
@@ -836,6 +976,34 @@ export function WorkflowPage({
                 />
               </article>
             ))}
+            <button
+              className="secondary"
+              disabled={draft.nodes.length >= 30}
+              onClick={() => {
+                let i = 1;
+                while (draft.nodes.some((n) => n.id === `T${i}`)) i++;
+                setDraft({
+                  ...draft,
+                  nodes: [
+                    ...draft.nodes,
+                    {
+                      id: `T${i}`,
+                      goal: "",
+                      plan: [""],
+                      acceptance: [""],
+                      dependsOn: [],
+                      connectionId:
+                        state.connections.find(
+                          (c) => c.kind !== "aimana" || !!c.agentId,
+                        )?.id || "",
+                      workspace,
+                    },
+                  ],
+                });
+              }}
+            >
+              添加子任务
+            </button>
             <label>
               总体验收
               <textarea
@@ -849,6 +1017,17 @@ export function WorkflowPage({
                 }
               />
             </label>
+            <label>
+              每个子任务最多执行轮数
+              <input
+                type="number"
+                min={1}
+                max={30}
+                aria-label="子任务轮数上限"
+                value={maxRounds}
+                onChange={(e) => setMaxRounds(Number(e.target.value))}
+              />
+            </label>
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -857,7 +1036,41 @@ export function WorkflowPage({
               />
               <span>开工后由原主控自动答疑、审核和返工，最后审核整体交付</span>
             </label>
-            <button className="primary" disabled={busy} onClick={create}>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={checkConnections}
+                onChange={(e) => setCheckConnections(e.target.checked)}
+              />
+              <span>检查时同时握手软件连接（不调用模型）</span>
+            </label>
+            <button className="secondary" disabled={busy} onClick={preflight}>
+              检查开工条件
+            </button>
+            {readiness && (
+              <div
+                className={readiness.ok ? "verification-report" : "warning"}
+                role="status"
+              >
+                <strong>
+                  {readiness.ok
+                    ? "配置检查通过；模型调用仍需实际任务验证"
+                    : "请先修正以下问题"}
+                </strong>
+                <ul>
+                  {readiness.issues.map((issue, i) => (
+                    <li key={i}>
+                      {issue.nodeId}：{issue.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button
+              className="primary"
+              disabled={busy || !draft.nodes.length}
+              onClick={create}
+            >
               保存协作计划
             </button>
           </div>
@@ -874,6 +1087,18 @@ export function WorkflowPage({
           {workflow.lastError && (
             <p className="warning">{workflow.lastError}</p>
           )}
+          <p className="hint">
+            已验收{" "}
+            {
+              workflow.taskIds.filter(
+                (id) =>
+                  state.tasks.find((t) => t.id === id)?.status === "accepted",
+              ).length
+            }{" "}
+            / {workflow.taskIds.length} 项 ·{" "}
+            {workflow.autoReview ? "自动答疑与审核" : "人工审核"}
+            {workflow.queueReason ? ` · ${workflow.queueReason}` : ""}
+          </p>
           <div className="workflow-grid">
             {workflow.taskIds.map((id) => {
               const task = state.tasks.find((t) => t.id === id);
@@ -891,6 +1116,15 @@ export function WorkflowPage({
                       {taskStateLabel[task.status] || task.status} · 第{" "}
                       {task.rounds} 轮
                     </p>
+                    <p className="hint">
+                      前置：
+                      {(task.dependsOn || [])
+                        .map(
+                          (id) =>
+                            state.tasks.find((t) => t.id === id)?.nodeId || id,
+                        )
+                        .join("、") || "无"}
+                    </p>
                     <small>
                       {task.queueReason ||
                         state.connections.find(
@@ -905,15 +1139,52 @@ export function WorkflowPage({
           <div className="button-row">
             <button
               className="primary"
-              disabled={busy || workflow.status === "accepted"}
+              disabled={
+                busy ||
+                ["accepted", "budget_exhausted"].includes(workflow.status)
+              }
               onClick={async () => {
                 setBusy(true);
                 await call("workflow.start", { id: workflow.id });
                 setBusy(false);
               }}
             >
-              开工 / 调度待执行项
+              {workflow.paused || workflow.automationPaused
+                ? "继续协作 / 重试自动流程"
+                : "开工 / 调度待执行项"}
             </button>
+            <button
+              className="secondary"
+              disabled={busy || !workflow.threadId || !workflow.coordinatorId}
+              onClick={() => {
+                setGoal(workflow.goal);
+                setCoordinator(workflow.coordinatorId);
+                setAuto(workflow.autoReview ?? true);
+                setDraft({
+                  goal: workflow.goal,
+                  coordinatorId: workflow.coordinatorId,
+                  threadId: workflow.threadId,
+                  nodes: structuredClone(workflow.nodes),
+                  acceptance: [...workflow.acceptance],
+                });
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              复制为新计划草稿
+            </button>
+            {workflow.running && workflow.status !== "accepted" && (
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  await call("workflow.pause", { id: workflow.id });
+                  setBusy(false);
+                }}
+              >
+                暂停新工作
+              </button>
+            )}
             <button
               className="secondary"
               disabled={
@@ -933,6 +1204,11 @@ export function WorkflowPage({
               交给原主控审核整体
             </button>
           </div>
+          {workflow.paused && (
+            <p className="hint">
+              已暂停新派发、自动答疑与新审核。在途回合继续运行并接收状态；需要停止回合时请进入对应任务请求取消。
+            </p>
+          )}
           {workflow.reviews.map((review, index) => (
             <p className="hint" key={index}>
               整体审核 {index + 1} · {review.feedback}
@@ -941,25 +1217,59 @@ export function WorkflowPage({
         </section>
       ))}
       <section className="panel settings-panel">
-        <h2>主控收件箱</h2>
+        <div className="section-title">
+          <h2>主控收件箱</h2>
+          <select
+            aria-label="收件箱筛选"
+            value={inboxFilter}
+            onChange={(e) => setInboxFilter(e.target.value)}
+          >
+            <option value="attention">待处理</option>
+            <option value="all">全部记录</option>
+          </select>
+        </div>
         {(state.messages || [])
-          .slice(-12)
+          .filter((m) => inboxFilter === "all" || m.state !== "delivered")
+          .slice(-50)
           .reverse()
           .map((message) => (
             <article className="workflow-node" key={message.id}>
               <strong>
                 {message.kind === "question" ? "执行器疑问" : "执行器交付"} ·{" "}
-                {message.state}
+                {{
+                  pending: "等待主控处理",
+                  processing: "主控处理中",
+                  needs_user: "需要你处理",
+                  delivered: "已处理",
+                }[message.state] || message.state}
               </strong>
               <p>
                 {message.response ||
                   message.error ||
                   message.text.slice(0, 300)}
               </p>
+              {message.response && (
+                <details>
+                  <summary>查看原问题或交付</summary>
+                  <p>{message.text}</p>
+                </details>
+              )}
+              <button
+                className="secondary"
+                onClick={() => openTask(message.taskId)}
+              >
+                前往对应任务处理
+              </button>
             </article>
           ))}
-        {!state.messages?.length && (
-          <p className="hint">执行器的疑问与结果会持久保存在这里。</p>
+        {!(state.messages || []).some(
+          (m) => inboxFilter === "all" || m.state !== "delivered",
+        ) && (
+          <p className="hint">
+            {inboxFilter === "attention"
+              ? "暂无待处理疑问或交付，可切换到全部记录查看历史。"
+              : "执行器的疑问与结果会持久保存在这里。"}
+          </p>
         )}
       </section>
     </>

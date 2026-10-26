@@ -12,6 +12,7 @@ import {
   McpIntegration,
 } from "./collaboration";
 import "./style.css";
+import { useDraftState, clearDraft } from "./drafts";
 
 const api = window.cooperation;
 const statusNames: Record<string, string> = {
@@ -158,7 +159,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.4.1",
+    version: "0.5.0",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -178,9 +179,22 @@ function App() {
       if (snapshot?.tasks && snapshot?.connections) setState(snapshot);
     });
     const stop = api.onOffline(() => setOffline(true));
+    const stopNavigate = api.onNavigate((value) => {
+      if (value.page === "tasks") {
+        setSelected(value.id);
+        setPage("tasks");
+      } else if (value.page === "workflows") setPage("workflows");
+    });
+    const draftError = () =>
+      setNotice("本机草稿未能保存，请复制未提交的内容后再关闭窗口。");
+    const stopWarning = api.onWarning(setNotice);
+    window.addEventListener("cooperation:draft-error", draftError);
     return () => {
       unsubscribe();
       stop();
+      stopNavigate();
+      stopWarning();
+      window.removeEventListener("cooperation:draft-error", draftError);
     };
   }, []);
   useEffect(() => {
@@ -222,6 +236,10 @@ function App() {
       "pending_review",
       "needs_user",
       "delivery_unknown",
+      "stalled",
+      "failed",
+      "budget_exhausted",
+      "cancel_requested",
     ].includes(t.status),
   );
   const visible = state.tasks.filter(
@@ -472,6 +490,8 @@ function App() {
                   <TaskDetail
                     task={current}
                     connections={state.connections}
+                    tasks={state.tasks}
+                    openTask={(id) => setSelected(id)}
                     call={call}
                     notify={setNotice}
                   />
@@ -730,11 +750,15 @@ function TaskDetail({
   connections,
   call,
   notify,
+  tasks,
+  openTask,
 }: {
   task: Task;
   connections: Connection[];
   call: Call;
   notify: (message: string) => void;
+  tasks: Task[];
+  openTask: (id: string) => void;
 }) {
   const [tab, setTab] = useState("overview");
   const [answer, setAnswer] = useState("");
@@ -841,6 +865,35 @@ function TaskDetail({
               ))}
             </div>
             <TaskTools task={task} call={call} />
+            {task.busy && (
+              <p className="hint" role="status">
+                {task.status === "pending_review"
+                  ? "主控正在审核交付，其他执行器仍可继续工作。"
+                  : task.status === "needs_input"
+                    ? "正在处理执行器疑问，请稍候。"
+                    : "正在处理该任务，请稍候。"}
+              </p>
+            )}
+            {!!task.queueBlockers?.length && (
+              <div className="verification-report">
+                <strong>正在等待以下任务</strong>
+                <div className="button-row">
+                  {task.queueBlockers.map((id) => {
+                    const peer = tasks.find((t) => t.id === id);
+                    return (
+                      <button
+                        className="secondary"
+                        key={id}
+                        onClick={() => openTask(id)}
+                      >
+                        {peer?.nodeId || "任务"} · {peer?.goal || id} ·{" "}
+                        {peer ? statusNames[peer.status] || peer.status : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {task.result?.text && (
               <>
                 <div className="subheading">
@@ -1142,14 +1195,20 @@ function NewTask({
   close: () => void;
   created: (task: Task) => void;
 }) {
-  const [mode, setMode] = useState<"demo" | "real">("demo");
-  const [goal, setGoal] = useState("");
-  const [plan, setPlan] = useState("");
-  const [acceptance, setAcceptance] = useState("");
-  const [coordinatorId, setCoordinator] = useState(
+  const [mode, setMode] = useDraftState<"demo" | "real">(
+    "task.mode",
+    "demo",
+    (v) => v === "demo" || v === "real",
+  );
+  const [goal, setGoal] = useDraftState("task.goal", "");
+  const [plan, setPlan] = useDraftState("task.plan", "");
+  const [acceptance, setAcceptance] = useDraftState("task.acceptance", "");
+  const [coordinatorId, setCoordinator] = useDraftState(
+    "task.coordinator",
     connections.find((c) => c.kind === "codex")?.id || "",
   );
-  const [connectionId, setConnection] = useState(
+  const [connectionId, setConnection] = useDraftState(
+    "task.executor",
     connections.find((c) => c.kind === "a2a")?.id ||
       connections.find((c) => c.kind === "codex")?.id ||
       "",
@@ -1157,15 +1216,35 @@ function NewTask({
   const initialExecutor =
     connections.find((c) => c.kind === "a2a") ||
     connections.find((c) => c.kind === "codex");
-  const [workspace, setWorkspace] = useState(initialExecutor?.cwd || "");
+  const [workspace, setWorkspace] = useDraftState(
+    "task.workspace",
+    initialExecutor?.cwd || "",
+  );
   const selectedExecutor = connections.find((c) => c.id === connectionId);
-  const [binding, setBinding] = useState<{
+  const [binding, setBinding] = useDraftState<{
     threadId: string;
     goal: string;
-  } | null>(null);
-  const [autoReview, setAutoReview] = useState(false);
-  const [contract, setContract] = useState<Contract>(defaultContract);
-  const [maxRounds, setRounds] = useState(5);
+  } | null>(
+    "task.binding",
+    null,
+    (v) =>
+      v === null ||
+      (typeof v === "object" &&
+        v !== null &&
+        typeof (v as { threadId?: unknown }).threadId === "string" &&
+        typeof (v as { goal?: unknown }).goal === "string"),
+  );
+  const [autoReview, setAutoReview] = useDraftState("task.auto", false);
+  const [contract, setContract] = useDraftState<Contract>(
+    "task.contract",
+    defaultContract,
+    (v) =>
+      !!v &&
+      typeof v === "object" &&
+      Array.isArray((v as Contract).verification) &&
+      Array.isArray((v as Contract).allowedPaths),
+  );
+  const [maxRounds, setRounds] = useDraftState("task.rounds", 5);
   const [busy, setBusy] = useState(false);
   const lines = (value: string) =>
     value
@@ -1214,7 +1293,10 @@ function NewTask({
       autoReview: mode === "real" && autoReview,
     });
     setBusy(false);
-    if (task) created(task);
+    if (task) {
+      clearDraft("task.");
+      created(task);
+    }
   }
   return (
     <Modal

@@ -7,12 +7,14 @@ const {
   safeStorage,
   dialog,
   shell,
+  Notification,
 } = require("electron");
 const { fork } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { installConnector } = require("./connector.cjs");
+const { notices } = require("./notifications.cjs");
 
 let window,
   worker,
@@ -21,6 +23,7 @@ let window,
   latest;
 let sequence = 0;
 const requests = new Map();
+const notifications = new Set();
 const root = path.join(__dirname, "..");
 const dataDir =
   process.env.AICO_DATA_DIR ||
@@ -125,6 +128,8 @@ else {
       worker.stdout.on("data", () => {});
       worker.stderr.on("data", () => {});
       worker.on("message", (message) => {
+        if (message.type === "warning")
+          window?.webContents.send("cooperation:warning", message.message);
         if (message.type === "save-secret") {
           try {
             if (
@@ -144,6 +149,26 @@ else {
           }
         }
         if (message.type === "ready" || message.type === "snapshot") {
+          if (!process.env.AICO_TEST && Notification.isSupported()) {
+            for (const item of notices(latest, message.snapshot)) {
+              try {
+                const notice = new Notification({
+                  title: item.title,
+                  body: item.body,
+                  icon: path.join(__dirname, "assets", "app.ico"),
+                  silent: true,
+                });
+                notifications.add(notice);
+                notice.once("close", () => notifications.delete(notice));
+                notice.once("click", () => {
+                  showWindow();
+                  window?.webContents.send("cooperation:navigate", item);
+                  notifications.delete(notice);
+                });
+                notice.show();
+              } catch {}
+            }
+          }
           latest = message.snapshot;
           sendSnapshot();
         }
@@ -199,6 +224,8 @@ else {
         "scheduler.save",
         "workflow.analyze",
         "workflow.create",
+        "workflow.preflight",
+        "workflow.pause",
         "workflow.start",
         "workflow.review",
         "pairing.start",

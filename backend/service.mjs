@@ -51,6 +51,8 @@ export class DesktopService {
     this.closed = false;
     this.codex = new Map();
     this.inFlight = new Set();
+    this.backgroundJobs = new Map();
+    this.mutationDepth = 0;
     this.plannedSessions = new Map();
     this.pollBackoff = new Map();
     this.relay = new SqliteRelay(this.store, (config) => this.adapter(config));
@@ -107,12 +109,29 @@ export class DesktopService {
       workflows: this.store.workflows(),
       scheduler: this.collaboration.settings(),
       database: this.store.path,
-      version: "0.4.1",
+      version: "0.5.0",
     };
   }
   changed() {
-    if (this.closed) return;
+    if (this.closed || this.mutationDepth) return;
     this.notify(this.snapshot());
+  }
+  background(key, action) {
+    if (this.closed || this.backgroundJobs.has(key)) return;
+    const job = Promise.resolve()
+      .then(() => (this.closed ? undefined : action()))
+      .catch(() => {})
+      .finally(() => this.backgroundJobs.delete(key));
+    this.backgroundJobs.set(key, job);
+  }
+  async drainBackground() {
+    while (this.backgroundJobs.size)
+      await Promise.all([...this.backgroundJobs.values()]);
+  }
+  automationEnabled(task) {
+    if (!task.workflowId) return true;
+    const workflow = this.workflows.get(task.workflowId);
+    return workflow.running && !workflow.automationPaused;
   }
   adapter(config) {
     if (config.type === "aimana") {
@@ -409,7 +428,36 @@ export class DesktopService {
         }
         await this.relay.dispatch(id, task.ownerThreadId);
       } else if (kind === "poll") await this.relay.poll(id, task.ownerThreadId);
-      else if (kind === "answer") {
+      else if (kind === "open-session") {
+        const remoteId =
+          task.remoteTaskId ||
+          (task.pending?.messageId && `cowork-${task.pending.messageId}`);
+        if (task.executor.type !== "aimana" || !remoteId)
+          throw new Error("该任务没有可打开的 AIMana 原会话");
+        await this.adapter(task.executor).open(remoteId);
+        return task;
+      } else if (kind === "retry") {
+        if (task.status !== "failed" || !task.contextId || task.pending)
+          throw new Error(
+            "只可重试已确认失败且保留原上下文的回合；未知发送需先核对",
+          );
+        if (task.rounds >= task.maxRounds)
+          throw new Error("执行轮次已耗尽，不能自动增加预算");
+        task.reviews.push({
+          decision: "revise",
+          feedback:
+            "用户要求重试已确认失败的原回合，按原目标、约束和验收继续。",
+          evidence: [],
+          round: task.rounds,
+          at: new Date().toISOString(),
+        });
+        task.status = "queued";
+        task.automationError = null;
+        this.relay.event(task, "retry_requested", {
+          message: "已请求在原执行会话重试",
+        });
+        this.store.saveTask(task);
+      } else if (kind === "answer") {
         task.userQuestion = null;
         this.store.saveTask(task);
         await this.relay.answer(id, task.ownerThreadId, text.parse(data.text));
@@ -445,6 +493,7 @@ export class DesktopService {
         if (task.status !== "stalled")
           throw new Error("只有无进展暂停的任务可继续");
         task.status = "revision_ready";
+        task.automationError = null;
         this.relay.event(task, "resumed", {
           message: "用户已核对并选择继续原会话",
         });
@@ -521,6 +570,7 @@ export class DesktopService {
       if (
         updated.status === "pending_review" &&
         updated.autoReview &&
+        this.automationEnabled(updated) &&
         kind !== "codex-review"
       )
         await this.codexReview(updated);
@@ -617,6 +667,7 @@ export class DesktopService {
     await this.collaboration.afterAction(this.store.task(task.id));
     if (
       updated.autoReview &&
+      this.automationEnabled(updated) &&
       this.store.task(task.id).status === "revision_ready"
     ) {
       const ready = this.store.task(task.id);
@@ -627,30 +678,36 @@ export class DesktopService {
   async tick() {
     for (const task of this.store.tasks())
       if (
-        ["working", "cancel_requested"].includes(task.status) &&
+        (["working", "cancel_requested"].includes(task.status) ||
+          (task.status === "needs_user" && task.executor.type === "aimana")) &&
         !this.inFlight.has(task.id) &&
         Date.now() >= (this.pollBackoff.get(task.id)?.next || 0)
       ) {
-        try {
-          await this.action(
-            task.id,
-            task.status === "cancel_requested" ? "recover" : "poll",
-          );
-          this.pollBackoff.delete(task.id);
-        } catch (error) {
-          const failures = (this.pollBackoff.get(task.id)?.failures || 0) + 1;
-          this.pollBackoff.set(task.id, {
-            failures,
-            next:
-              Date.now() + Math.min(60000, 2500 * 2 ** Math.min(failures, 5)),
-          });
-          const current = this.store.task(task.id);
-          this.relay.event(current, "connection_error", {
-            message: error.message,
-          });
-          this.store.saveTask(current);
-          this.changed();
-        }
+        this.background(`poll:${task.id}`, async () => {
+          try {
+            await this.action(
+              task.id,
+              task.status === "cancel_requested" ? "recover" : "poll",
+            );
+            this.pollBackoff.delete(task.id);
+          } catch (error) {
+            if (this.closed) return;
+            const failures = (this.pollBackoff.get(task.id)?.failures || 0) + 1;
+            this.pollBackoff.set(task.id, {
+              failures,
+              next:
+                Date.now() + Math.min(60000, 2500 * 2 ** Math.min(failures, 5)),
+            });
+            const current = this.store.task(task.id);
+            if (["pending_review", "needs_input"].includes(current.status))
+              current.automationError = error.message;
+            this.relay.event(current, "connection_error", {
+              message: error.message,
+            });
+            this.store.saveTask(current);
+            this.changed();
+          }
+        });
       }
     await this.collaboration.tick();
     this.changed();
@@ -659,6 +716,9 @@ export class DesktopService {
     if (method === "snapshot") return this.snapshot();
     if (method === "workflow.analyze") return this.workflows.analyze(data);
     if (method === "workflow.create") return this.workflows.create(data);
+    if (method === "workflow.preflight") return this.workflows.preflight(data);
+    if (method === "workflow.pause")
+      return this.workflows.pause(z.string().uuid().parse(data.id));
     if (method === "workflow.start")
       return this.workflows.start(z.string().uuid().parse(data.id));
     if (method === "workflow.review")

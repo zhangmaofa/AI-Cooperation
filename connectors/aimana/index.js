@@ -1,4 +1,4 @@
-const BUILD = "0.4.0";
+const BUILD = "0.5.0";
 let cleanup;
 const terminal = new Set(["completed", "input-required", "failed", "canceled"]);
 function textOf(message) {
@@ -34,6 +34,12 @@ module.exports = {
     let active = false,
       stopped = false;
     const saveRun = async (run, patch) => {
+      if (
+        Object.keys(patch).every(
+          (key) => JSON.stringify(run[key]) === JSON.stringify(patch[key]),
+        )
+      )
+        return;
       await invoke("run", { id: run.id, patch });
       Object.assign(run, patch);
     };
@@ -246,6 +252,13 @@ module.exports = {
       }
       if (method === "poll") {
         await poll(run);
+        return true;
+      }
+      if (method === "open") {
+        await readSession(run);
+        await native("cowork:floating-window:open", {
+          conversationId: run.conversationId,
+        });
         return true;
       }
       if (method === "cancel") {

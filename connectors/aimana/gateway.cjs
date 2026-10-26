@@ -3,7 +3,7 @@ const fs = require("node:fs"),
   path = require("node:path"),
   crypto = require("node:crypto");
 const { createServer } = require("node:http");
-const BUILD = "0.4.0";
+const BUILD = "0.5.0";
 const terminal = new Set(["completed", "input-required", "failed", "canceled"]);
 function result(run) {
   return {
@@ -186,6 +186,10 @@ exports.start = function (api) {
     if (!Object.hasOwn(state.runs, data.id || ""))
       throw new Error("原执行记录不存在");
     const run = state.runs[data.id];
+    if (method === "open") {
+      await dispatch("open", { run });
+      return { opened: true };
+    }
     if (method === "poll") {
       if (!terminal.has(run.state) && run.conversationId)
         await dispatch("poll", { run });

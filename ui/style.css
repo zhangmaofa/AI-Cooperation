@@ -1596,3 +1596,51 @@ footer .dot {
   background: #fff1dd;
   color: #926028;
 }
+.workflow-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 20px;
+}
+.workflow-draft > button {
+  align-self: flex-start;
+}
+.workflow-draft > label,
+.workflow-node > label,
+.settings-panel > label {
+  display: block;
+}
+.workflow-node .form-two label {
+  display: block;
+  min-width: 0;
+}
+.workflow-node textarea {
+  min-height: 82px;
+}
+.workflow-node select[multiple] {
+  min-height: 76px;
+}
+.workflow-draft > label.checkbox-label,
+.settings-panel .checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.checkbox-label input {
+  flex: 0 0 13px;
+  margin-top: 3px;
+}
+.settings-panel > .section-title {
+  gap: 18px;
+}
+.settings-panel > .section-title > select {
+  max-width: 220px;
+}
+.workflow-node .section-title {
+  margin-bottom: 16px;
+}
+.collaboration-tools + .verification-report .button-row {
+  flex-wrap: wrap;
+}

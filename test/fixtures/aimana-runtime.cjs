@@ -10,6 +10,12 @@ const workspace = process.env.AIMANAPP_WORKSPACE;
 let sessions = [],
   starts = 0,
   window;
+let opened;
+ipcMain.handle("cowork:floating-window:open", (_event, { conversationId }) => {
+  if (!get(conversationId)) throw new Error("missing session");
+  opened = conversationId;
+  return { opened: true };
+});
 const agents = [
   {
     id: "writer",
@@ -88,7 +94,7 @@ ipcMain.handle("cowork:session:abort", (_event, { conversationId, turnId }) => {
   emit(s, { cancelled: true });
 });
 global.fixture = {
-  snapshot: () => ({ starts, sessions }),
+  snapshot: () => ({ starts, sessions, opened }),
   finish(id, report, extra = {}) {
     const s = get(id);
     s.isRunning = false;
