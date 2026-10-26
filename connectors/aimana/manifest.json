@@ -1,11 +1,15 @@
 {
   "id": "com.zhangmaofa.ai-cooperation",
   "name": "AI-Cooperation 连接器",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "githubRepo": "zhangmaofa/AI-Cooperation",
-  "description": "选择本机 Agent，与 AI-Cooperation 配对；不更改模型、账号或 Workspace 开关。",
+  "description": "使用普通 Cowork，会话绑定到指定 Agent、模型和目录；无需 Workspace 权限",
   "author": "zhangmaofa",
   "scope": "both",
   "main": "index.js",
-  "permissions": ["settings", "ipc", "network"]
+  "permissions": [
+    "settings",
+    "ipc",
+    "network"
+  ]
 }

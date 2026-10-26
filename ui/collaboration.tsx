@@ -195,7 +195,7 @@ export function TaskTools({ task, call }: { task: Task; call: Call }) {
           </button>
         )}
         {["delivery_unknown", "cancel_requested"].includes(task.status) &&
-          task.remoteTaskId && (
+          (task.remoteTaskId || task.executor.type === "aimana") && (
             <button
               className="secondary"
               disabled={busy || task.busy}
@@ -369,8 +369,8 @@ export function AimannaPairing({ call }: { call: Call }) {
     <section className="panel settings-panel">
       <h2>连接本机 AIMana</h2>
       <p className="hint">
-        通过 AIMana++ 面板选择已启用 Workspace 的 Agent 配对。沿用 AIMana
-        账号额度，无需模型 API key，也不用手工查找地址和连接 token。
+        通过 AIMana++ 连接普通 Cowork，无需 Workspace 权限。配对后在协调器选择
+        Agent、模型和目录，使用 AIMana 账号已有的模型额度。
       </p>
       <div className="button-row">
         <button
@@ -393,7 +393,7 @@ export function AimannaPairing({ call }: { call: Call }) {
             if (result) {
               setCode(result.code);
               setMessage(
-                "两分钟内在 AIMana++ 面板的 AI-Cooperation 区块粘贴配对码，读取并选择 Agent，再点击配对。",
+                "两分钟内在 AIMana++ 的 AI-Cooperation 区块粘贴配对码，点击“配对普通 Cowork”。",
               );
             }
           }}
@@ -440,11 +440,172 @@ export function AimannaPairing({ call }: { call: Call }) {
         </p>
       )}
       <p className="hint">
-        连接插件针对本机 AIMana 1.12.17
-        接口编写，真实兼容性仍需配对和任务实测。不会自动更改 Workspace
-        开关、模型或账号。
+        连接插件针对本机 AIMana 1.12.17 接口编写。请保持 AIMana
+        窗口打开；实际权限请求在原 Cowork 会话中处理。
+        旧版协调器无法完成新插件配对，请使用 0.4.0 或更新版本。
       </p>
     </section>
+  );
+}
+
+export function AimannaProfile({
+  connection,
+  call,
+  close,
+}: {
+  connection: Connection;
+  call: Call;
+  close: () => void;
+}) {
+  const [catalog, setCatalog] = useState(connection.catalog);
+  const [agentId, setAgent] = useState(connection.agentId || "");
+  const [model, setModel] = useState(connection.model || "");
+  const [cwd, setCwd] = useState(connection.cwd || "");
+  const [name, setName] = useState(connection.name);
+  const [busy, setBusy] = useState(false);
+  const agent = catalog?.agents.find((a) => a.id === agentId);
+  async function save(clone: boolean) {
+    setBusy(true);
+    const result = await call("connection.profile", {
+      id: connection.id,
+      name,
+      agentId,
+      model,
+      cwd,
+      clone,
+    });
+    setBusy(false);
+    if (result) close();
+  }
+  return (
+    <div className="modal-overlay">
+      <section
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="AIMana 执行器配置"
+      >
+        <div className="modal-heading">
+          <div>
+            <h2>AIMana 执行器配置</h2>
+            <p>
+              为新任务选择 Agent、模型和目录。保存副本可让同一个 AIMana
+              注册多个执行器；已有任务保留原会话配置。
+            </p>
+          </div>
+          <button
+            className="icon-button"
+            aria-label="关闭配置"
+            disabled={busy}
+            onClick={close}
+          >
+            ×
+          </button>
+        </div>
+        <div className="modal-body">
+          <label>
+            名称
+            <input
+              aria-label="执行器名称"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <label>
+            Agent
+            <select
+              aria-label="AIMana Agent"
+              value={agentId}
+              onChange={(e) => {
+                const a = catalog?.agents.find((v) => v.id === e.target.value);
+                setAgent(e.target.value);
+                setModel(
+                  a?.models.some((m) => m.id === a.defaultModel)
+                    ? a.defaultModel
+                    : a?.models[0]?.id || "",
+                );
+              }}
+            >
+              <option value="">选择 Agent</option>
+              {catalog?.agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.engine}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            模型
+            <select
+              aria-label="AIMana 模型"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              <option value="">选择可用模型</option>
+              {agent?.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                  {m.id === agent.defaultModel ? " · Agent 默认" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            工作目录
+            <select
+              aria-label="AIMana 工作目录"
+              value={cwd}
+              onChange={(e) => setCwd(e.target.value)}
+            >
+              <option value="">选择 AIMana 已有目录</option>
+              {catalog?.projects.map((p) => (
+                <option key={p.cwd} value={p.cwd}>
+                  {p.name} · {p.cwd}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="hint">
+            原生权限使用询问模式；模型变化会暂停提交结果，等待核对。不会修改
+            Agent 的全局默认配置。
+          </p>
+        </div>
+        <div className="modal-footer">
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              const r = await call<NonNullable<Connection["catalog"]>>(
+                "connection.test",
+                { id: connection.id },
+              );
+              if (r) setCatalog(r);
+              setBusy(false);
+            }}
+          >
+            刷新 Agent / 模型
+          </button>
+          <button className="secondary" onClick={close}>
+            取消
+          </button>
+          <button
+            className="secondary"
+            disabled={busy || !agentId || !model || !cwd || !name}
+            onClick={() => save(true)}
+          >
+            保存为另一个执行器
+          </button>
+          <button
+            className="primary"
+            disabled={busy || !agentId || !model || !cwd || !name}
+            onClick={() => save(false)}
+          >
+            保存配置
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

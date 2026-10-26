@@ -192,6 +192,7 @@ else {
         "snapshot",
         "connection.save",
         "connection.test",
+        "connection.profile",
         "task.analyze",
         "task.create",
         "task.action",

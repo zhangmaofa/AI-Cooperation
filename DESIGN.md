@@ -1,5 +1,7 @@
 # AI-Cooperation 协调器方案基线 v0.1
 
+0.4.0 接入修订：AIMana 原生 A2A 依赖普通开发者不可获得的 Workspace 灰度权限，因此默认改为普通 Cowork。插件读取可见 Agent 与引擎模型、已有项目目录；协调器保存多个执行器配置，在任务创建时固定 Agent / 模型 / cwd。插件仅管理自己创建的 Cowork 会话，使用原生账号授权及询问模式。loopback 桥凭据由本产品生成并 DPAPI 加密，与 AIMana 登录凭据无关。只有匹配回合的 turn_end 和本轮助手报告可以提交审核；重载和超时保留未知状态，禁止重放。此修订取代下文早期“默认 AIMana 使用原生 A2A”的部署假设；真实账号联调仍需确认。
+
 整理日期：2026-10-25。本文确定产品边界、技术框架与分阶段验收；选型尚未全部实现。现有实现状态以 README 的版本说明为准。用户已确认数据库采用 SQLite。
 
 ## 0. 桌面预览版 0.2 交付更新
@@ -62,7 +64,7 @@
 | 数据契约         | TypeScript 类型 + Zod + 协议版本                         | 校验连接器输入、模型结构化输出和状态转换；运行时边界也校验，不能只依赖编译类型                                          |
 | 独立界面         | React + TypeScript + Vite，Electron 桌面壳               | 连接管理、任务树、进度、疑问、审核历史、暂停/取消；Electron 负责桌面窗口/托盘，不承载唯一后台调度进程                   |
 | 主调集成         | Codex app-server（stdio）                                | 由协调器创建或明确绑定 thread，持续接收回合事件；普通模型 API 不替代完整 Codex harness                                  |
-| AIMana 集成      | 原生 A2A 0.3 JSON-RPC                                    | 与已检查的 AIMana 1.12.17 能力匹配；A2A 新版采用独立版本适配，不自动当成 0.3                                            |
+| AIMana 集成      | 普通 Cowork IPC + AIMana++ loopback 会话桥                                    | 普通开发者不依赖 Workspace 权限；A2A 0.3 仍作为独立通用适配器                                            |
 | 应用内入口       | Codex++ / AIMana++ 轻量 tweak                            | 选择会话、查看任务和连接状态，必要时补内部会话桥接                                                                      |
 | 模型调用工具入口 | MCP SDK                                                  | 让主调调用协调器工具；MCP 工具服务与 A2A Agent 调用分工不同，支持 MCP 不自动意味着能被当成完整执行 Agent                |
 | 验证             | Node test，后续 UI 用 Playwright                         | 保留已验证状态机用例；增加连接器契约、故障恢复、多实例调度及真实软件端到端验收                                          |

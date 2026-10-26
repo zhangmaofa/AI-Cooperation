@@ -39,7 +39,7 @@ function installConnector(root, runtime) {
       };
   }
   fs.mkdirSync(destination, { recursive: true });
-  for (const name of ["index.js", "manifest.json"])
+  for (const name of ["index.js", "gateway.cjs", "manifest.json"])
     fs.copyFileSync(path.join(source, name), path.join(destination, name));
   return {
     updated: true,

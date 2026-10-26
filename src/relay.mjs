@@ -121,6 +121,7 @@ export class Relay {
         "connectionId",
         "command",
         "model",
+        "agentId",
         "cwd",
       ].every(
         (k) => executor[k] === undefined || typeof executor[k] === "string",
@@ -135,6 +136,7 @@ export class Relay {
       connectionId: executor.connectionId,
       command: executor.command,
       model: executor.model,
+      agentId: executor.agentId,
       cwd: executor.cwd,
       args: executor.args,
     };

@@ -1,328 +1,363 @@
-// User-initiated pairing only. No credential logging, persistence, or automatic token rotation.
+const BUILD = "0.4.0";
 let cleanup;
-const CONNECTOR_BUILD = "0.3.3";
-function workspaceIssue(agent) {
-  if (!agent?.enabled) return "Workspace 已关闭";
-  // AIMana 1.12.17 reports unsaved defaults as enabled, while its server
-  // starts only when a persisted configuration is enabled.
-  if (!(agent.updatedAtMs > 0)) return "Workspace 尚未保存";
-  if (!agent.projectPath?.trim()) return "未选择工作目录";
-  if (!agent.model?.trim()) return "未选择模型";
-  if (!agent.hasToken) return "未生成本机连接凭据";
-  return "";
+const terminal = new Set(["completed", "input-required", "failed", "canceled"]);
+function textOf(message) {
+  if (typeof message.text === "string") return message.text;
+  if (typeof message.content === "string") return message.content;
+  return (message.content || message.blocks || [])
+    .filter((b) => b.type === "text" || b.kind === "text")
+    .map((b) => b.text || "")
+    .join("\n");
 }
-function record(api, stage, code = "ok") {
-  // Diagnostic records deliberately exclude agent IDs, pairing codes, tokens and raw errors.
-  const entry = {
-    build: CONNECTOR_BUILD,
-    process: api.process,
-    stage,
-    code,
-    at: new Date().toISOString(),
-  };
-  try {
-    api.log?.info?.(
-      `connector ${CONNECTOR_BUILD} ${api.process} ${stage} ${code}`,
-    );
-  } catch {}
-  try {
-    api.storage?.set?.(`diagnostics-${api.process}`, entry);
-  } catch {}
-}
-const pairingErrors = {
-  invalid_code: "配对码格式不正确，请完整复制协调器生成的配对码。",
-  expired_code: "配对码已过期或已使用，请回协调器生成新码。",
-  coordinator_unreachable:
-    "无法连接 AI-Cooperation。请保持协调器运行，并使用当前窗口生成的新配对码。",
-  agent_disabled:
-    "选中的 Agent 尚未启用 Workspace，或配置已变化。请检查原生设置后重新读取 Agent。",
-  missing_token:
-    "选中的 Agent 没有原生连接凭据，请在 AIMana 原生 Workspace 设置中检查该 Agent。",
-  token_unavailable:
-    "无法读取原生 Agent 连接凭据，请检查 AIMana 的凭据设置；连接器不会自动重置凭据。",
-  service_unavailable:
-    "AIMana 本机服务未能启动，请在原生 Workspace 设置中检查服务状态。",
-  card_unavailable: "AIMana 本机服务未响应 Agent Card，请检查服务状态后重试。",
-  card_unauthorized: "AIMana 拒绝访问这个 Agent，请检查原生 Agent 的连接权限。",
-  agent_unavailable:
-    "本机服务没有提供选中的 Agent，请重新读取 Agent 并检查 Workspace 状态。",
-  invalid_card: "AIMana 返回的 Agent Card 不兼容，请检查软件版本。",
-  secure_storage_failed:
-    "协调器无法加密保存连接凭据，请检查 Windows 安全存储是否可用。",
-  connection_save_failed:
-    "协调器未能保存 Agent 连接，请检查该连接是否正在执行任务。",
-};
-function failure(code) {
-  return {
-    ok: false,
-    code,
-    message:
-      pairingErrors[code] || "配对未完成，请更新协调器与连接插件后重试。",
-  };
-}
+const pathKey = (value) =>
+  String(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 module.exports = {
   start(api) {
-    record(api, "loaded");
     if (api.process === "main") {
-      const channel = `aimanapp:t:${api.manifest.id}:pair`;
-      const { ipcMain } = require("electron");
-      ipcMain.removeHandler(channel);
-      ipcMain.removeHandler(`aimanapp:t:${api.manifest.id}:version`);
-      api.ipc.handle("version", () => ({
-        build: CONNECTOR_BUILD,
-        hasFetch: typeof fetch === "function",
-      }));
-      api.ipc.handle("pair", async (_event, input) => {
-        record(api, "pair-request");
-        // AIMana++ passes handler payload as the first argument; support both IPC wrappers.
-        input ||= _event;
-        const match = /^(\d{1,5})\.([a-f0-9]{36})$/.exec(input.code || "");
-        if (!match || Number(match[1]) > 65535 || Number(match[1]) < 1)
-          return failure("invalid_code");
-        let response;
-        try {
-          response = await fetch(`http://127.0.0.1:${match[1]}/pair`, {
-            method: "POST",
-            redirect: "error",
-            signal: AbortSignal.timeout(15000),
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              code: input.code,
-              agentId: input.agentId,
-              token: input.token,
-            }),
-          });
-        } catch {
-          record(api, "pair-network", "coordinator_unreachable");
-          return failure("coordinator_unreachable");
-        }
-        if (!response.ok) {
-          let body;
-          try {
-            body = await response.json();
-          } catch {}
-          record(
-            api,
-            "pair-response",
-            body?.code && pairingErrors[body.code]
-              ? body.code
-              : `http_${response.status}`,
-          );
-          if (body?.code && pairingErrors[body.code]) return failure(body.code);
-          return response.status === 403
-            ? failure("expired_code")
-            : {
-                ok: false,
-                message: `协调器拒绝配对（HTTP ${response.status}）。请更新到 0.3.1 后生成新码查看具体原因。`,
-              };
-        }
-        record(api, "paired");
-        return { ok: true };
-      });
-      cleanup = () => {
-        ipcMain.removeHandler(channel);
-        ipcMain.removeHandler(`aimanapp:t:${api.manifest.id}:version`);
-      };
+      delete require.cache[require.resolve("./gateway.cjs")];
+      cleanup = require("./gateway.cjs").start(api);
       return;
     }
     const { ipcRenderer } = require("electron");
-    const handle = api.settings.register({
-      id: "cooperation",
-      title: "AI-Cooperation 协作连接",
-      render(root) {
-        record(api, "panel-rendered");
-        const version = document.createElement("p");
-        version.textContent = `连接器 v${CONNECTOR_BUILD} · 正在核对主进程版本…`;
-        api.ipc
-          .invoke("version")
-          .then((info) => {
-            version.textContent =
-              info?.build === CONNECTOR_BUILD
-                ? `连接器 v${CONNECTOR_BUILD} · 主进程 / 面板版本一致`
-                : `连接器 v${CONNECTOR_BUILD} · 主进程版本不同，请重载插件`;
-            record(
-              api,
-              "version-check",
-              info?.build === CONNECTOR_BUILD ? "matched" : "mismatched",
-            );
-          })
-          .catch(() => {
-            version.textContent = `连接器 v${CONNECTOR_BUILD} · 主进程未响应，请重载插件`;
-            record(api, "version-check", "unavailable");
+    const prefix = `aimanapp:t:${api.manifest.id}:cowork`;
+    const invoke = (method, data) =>
+      ipcRenderer.invoke(`${prefix}:${method}`, data);
+    const native = async (method, data) => {
+      try {
+        return await ipcRenderer.invoke(method, data);
+      } catch (error) {
+        api.log?.warn?.(`Cowork native call failed: ${method}`);
+        throw error;
+      }
+    };
+    const running = new Map();
+    let active = false,
+      stopped = false;
+    const saveRun = async (run, patch) => {
+      await invoke("run", { id: run.id, patch });
+      Object.assign(run, patch);
+    };
+    async function catalog() {
+      const [agents, projects] = await Promise.all([
+        native("cowork:agents:list"),
+        native("cowork:projects:list"),
+      ]);
+      const engines = [
+        ...new Set(
+          agents
+            .filter((a) => ["mana", "codex", "claude"].includes(a.engine))
+            .map((a) => a.engine),
+        ),
+      ];
+      const models = {};
+      for (const engine of engines) {
+        const values = await native("cowork:agent:engineModels", { engine });
+        models[engine] = values
+          .map((v) =>
+            typeof v === "string"
+              ? { id: v, name: v }
+              : {
+                  id: v.value || v.id,
+                  name: v.label || v.name || v.value || v.id,
+                },
+          )
+          .filter((v) => typeof v.id === "string" && v.id);
+      }
+      return {
+        protocol: "aico-cowork/1",
+        build: BUILD,
+        agents: agents
+          .filter((a) => models[a.engine]?.length)
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            engine: a.engine,
+            defaultModel: a.model || "",
+            models: models[a.engine],
+          })),
+        projects: projects.map((p) => ({ name: p.name, cwd: p.cwd })),
+        capabilities: {
+          execute: true,
+          sameSession: true,
+          coordinator: false,
+          cancel: true,
+        },
+      };
+    }
+    async function readSession(run) {
+      const sessions = await native("cowork:sessions:list", {
+        conversationId: run.conversationId,
+      });
+      const session = sessions.find((s) => s.id === run.conversationId);
+      if (
+        !session ||
+        session.ownerSurface !== "cowork" ||
+        session.agentId !== run.profile.agentId ||
+        pathKey(session.projectCwd) !== pathKey(run.profile.cwd)
+      )
+        throw new Error("原会话绑定已变化");
+      return session;
+    }
+    async function messages(run) {
+      const value = await native("cowork:sessions:loadMessages", {
+        id: run.conversationId,
+        limit: 200,
+      });
+      return Array.isArray(value) ? value : value.messages || [];
+    }
+    async function poll(run) {
+      const session = await readSession(run);
+      const actualModel = session.model || run.profile.model;
+      if (actualModel !== run.profile.model) {
+        await saveRun(run, {
+          actualModel,
+          state: "auth-required",
+          text: `AIMana 已切换模型：请求 ${run.profile.model}，实际 ${actualModel}。请在原会话核对，本轮结果暂不提交验收。`,
+        });
+        return;
+      }
+      if (session.pendingConfirmation || session.pendingPicker) {
+        await saveRun(run, {
+          state: "auth-required",
+          text: "AIMana 请求用户确认或交互，请打开原 Cowork 会话处理，然后在协调器检查状态。",
+        });
+        return;
+      }
+      if (!run.ended) {
+        if (run.state === "auth-required" && session.isRunning)
+          await saveRun(run, { state: "working", text: "原会话继续执行" });
+        return;
+      }
+      if (run.backgroundPending || session.isRunning) return;
+      const fresh = (await messages(run)).filter(
+        (m) =>
+          m.role === "assistant" &&
+          !(run.baseline || []).includes(m.id) &&
+          (!m.turnId || m.turnId === run.turnId),
+      );
+      const last = fresh.at(-1),
+        text = last ? textOf(last) : "";
+      if (run.cancelled) {
+        await saveRun(run, {
+          state: "canceled",
+          text: "AIMana 已确认原回合取消",
+          actualModel,
+        });
+        return;
+      }
+      if (!text.trim()) {
+        await saveRun(run, {
+          state: "unknown",
+          text: "原回合已结束，但未读到对应报告，请在原 Cowork 会话核对。",
+        });
+        return;
+      }
+      if (last.status && ["error", "failed", "stopped"].includes(last.status)) {
+        await saveRun(run, { state: "failed", text, actualModel });
+        return;
+      }
+      let report;
+      try {
+        report = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+      } catch {}
+      const needsInput =
+        report?.status === "needs_input" &&
+        typeof report.question === "string" &&
+        report.question.trim();
+      await saveRun(run, {
+        state: needsInput ? "input-required" : "completed",
+        text: needsInput
+          ? report.question
+          : typeof report?.summary === "string"
+            ? report.summary
+            : text,
+        actualModel,
+      });
+    }
+    async function execute(method, data) {
+      if (method === "inspect") return catalog();
+      const run = data.run;
+      running.set(run.conversationId || run.id, run);
+      if (method === "send") {
+        const info = await catalog();
+        if (
+          !info.agents
+            .find((a) => a.id === run.profile.agentId)
+            ?.models.some((m) => m.id === run.profile.model) ||
+          !info.projects.some(
+            (p) => pathKey(p.cwd) === pathKey(run.profile.cwd),
+          )
+        )
+          throw new Error("模型或工作目录不可用");
+        if (!run.conversationId) {
+          const session = await native("cowork:sessions:create", {
+            projectCwd: run.profile.cwd,
+            title: "AI-Cooperation 协作任务",
+            source: "new",
+            sourceLabel: "AI-Cooperation",
+            model: run.profile.model,
+            modelChoiceSource: "manual",
+            modeLabel: "询问模式",
+            permissionMode: "ask",
+            worktreeMode: "source",
+            agentId: run.profile.agentId,
+            ownerSurface: "cowork",
+            speedMode: false,
           });
-        const text = document.createElement("p");
-        text.textContent =
-          "在协调器生成配对码，选择已启用 Workspace 的 Agent 后配对。使用现有账号额度；连接凭据自动加密保存。";
-        const setup = document.createElement("p");
-        setup.textContent =
-          "首次连接：在 AIMana 的 Agent 编辑页选择模型和工作目录，开启 Workspace 并保存。若开关已开但配置未保存或缺少凭据，先关闭并保存，再打开并保存，然后重新读取 Agent。";
+          await saveRun(run, {
+            conversationId: session.id,
+            contextId: `cowork-${session.id}`,
+          });
+        }
+        const session = await readSession(run);
+        if (
+          session.isRunning ||
+          session.pendingConfirmation ||
+          session.pendingPicker ||
+          session.model !== run.profile.model
+        )
+          throw new Error("原会话不空闲或模型已改变");
+        await saveRun(run, {
+          baseline: (await messages(run)).map((m) => m.id),
+          state: "working",
+          text: "正在调用原生 Cowork 回合",
+        });
+        running.delete(run.id);
+        running.set(run.conversationId, run);
+        const prompt = `你是 AI-Cooperation 的执行 Agent。按任务和反馈执行，修改限定在所给工作目录。报告真实产物和验证证据，完成后等待主控审核。需要补充任务信息时结束本轮并提出具体疑问。最终返回 JSON：{"status":"completed 或 needs_input","summary":"结果与证据","question":"需要回答的具体问题"}。任务数据：\n${data.text}`;
+        await native(
+          session.sdkSessionId || session.sdkConversationId
+            ? "cowork:session:continue"
+            : "cowork:session:start",
+          {
+            conversationId: run.conversationId,
+            turnId: run.turnId,
+            prompt,
+            displayPrompt: data.text,
+            projectCwd: run.profile.cwd,
+            projectName: run.profile.cwd,
+            agentId: run.profile.agentId,
+            modelLabel: run.profile.model,
+            permissionMode: "ask",
+            speedMode: false,
+          },
+        );
+        return true;
+      }
+      if (method === "poll") {
+        await poll(run);
+        return true;
+      }
+      if (method === "cancel") {
+        await readSession(run);
+        await native("cowork:session:abort", {
+          conversationId: run.conversationId,
+          turnId: run.turnId,
+        });
+        return true;
+      }
+      throw new Error("未知操作");
+    }
+    const jobs = async (_event, job) => {
+      if (!active || stopped) return;
+      try {
+        const value = await execute(job.method, job.data);
+        await invoke("reply", { id: job.id, result: value });
+      } catch {
+        await invoke("reply", { id: job.id, error: true });
+      }
+    };
+    const events = async (_event, value) => {
+      if (!active || stopped) return;
+      const payload = value?.scope
+        ? value.scope.business === "cowork"
+          ? { ...value.event, conversationId: value.execution.conversationId }
+          : null
+        : value;
+      const run = payload && running.get(payload.conversationId);
+      if (!run || payload.turnId !== run.turnId || terminal.has(run.state))
+        return;
+      try {
+        if (payload.type === "turn_end") {
+          await saveRun(run, {
+            ended: true,
+            cancelled: Boolean(payload.cancelled),
+            backgroundPending: Boolean(
+              payload.backgroundWorkPending || payload.dependentWorkPending,
+            ),
+          });
+          await poll(run);
+        }
+      } catch {
+        /* Keep pending; an idle window alone never proves completion. */
+      }
+    };
+    ipcRenderer.on(`${prefix}:job`, jobs);
+    ipcRenderer.on("cowork:conversation:event", events);
+    ipcRenderer.on("agent-runtime:conversation:event", events);
+    const hello = () =>
+      invoke("hello")
+        .then((info) => {
+          if (stopped) return;
+          const wasActive = active;
+          active = info.active && info.build === BUILD;
+          if (!wasActive && active)
+            for (const run of info.runs || [])
+              if (run.conversationId) running.set(run.conversationId, run);
+        })
+        .catch(() => {
+          active = false;
+        });
+    hello();
+    const heartbeat = setInterval(hello, 5000);
+    const panel = api.settings.register({
+      id: "cooperation",
+      title: "AI-Cooperation · 普通 Cowork",
+      render(root) {
+        const version = document.createElement("p");
+        version.textContent = `连接器 v${BUILD} · 普通 Cowork`;
+        const hint = document.createElement("p");
+        hint.textContent =
+          "在协调器生成配对码，配对后回协调器选择 Agent、模型和工作目录。使用已有 Cowork 权限及账号额度。";
         const code = document.createElement("input");
-        code.placeholder = "粘贴 AI-Cooperation 配对码";
         code.setAttribute("aria-label", "AI-Cooperation 配对码");
-        const agents = document.createElement("select");
-        agents.setAttribute("aria-label", "配对 Agent");
-        const refresh = document.createElement("button");
-        refresh.textContent = "读取已启用的 Agent";
-        const pair = document.createElement("button");
-        pair.textContent = "配对选中 Agent";
+        code.placeholder = "粘贴 AI-Cooperation 配对码";
+        const button = document.createElement("button");
+        button.textContent = "配对普通 Cowork";
         const status = document.createElement("p");
         status.setAttribute("role", "status");
-        const details = document.createElement("ul");
-        details.setAttribute("aria-label", "Agent 配置检查");
-        refresh.onclick = async () => {
+        button.onclick = async () => {
+          button.disabled = true;
           try {
-            record(api, "read-agents");
-            const config = await ipcRenderer.invoke("a2a:config:get");
-            agents.replaceChildren();
-            details.replaceChildren();
-            let disabled = 0;
-            for (const agent of config.agents || []) {
-              const issue = workspaceIssue(agent);
-              if (!issue) {
-                const option = document.createElement("option");
-                option.value = agent.agentId;
-                option.textContent =
-                  agent.name || agent.agentName || agent.agentId;
-                agents.append(option);
-              } else if (agent.enabled) {
-                const item = document.createElement("li");
-                item.textContent = `${agent.name || agent.agentName || agent.agentId}：${issue}`;
-                details.append(item);
-              } else {
-                disabled++;
-              }
-            }
-            status.textContent = agents.options.length
-              ? "请选择已配置的 Agent 并点击配对。"
-              : `没有可配对的 Agent（${disabled} 个 Workspace 已关闭）。请先在 Agent 编辑页完成配置并保存；仅显示“已启用”不代表已完成配置。`;
+            const reply = await invoke("pair", { code: code.value.trim() });
+            status.textContent = reply.ok
+              ? "配对成功。请回协调器选择 Agent、模型和目录。"
+              : reply.message;
+            if (reply.ok) code.value = "";
           } catch {
-            record(api, "read-agents", "failed");
-            status.textContent =
-              "无法读取 Agent。请检查 AIMana 版本和 Workspace 设置。";
-          }
-        };
-        pair.onclick = async () => {
-          if (!agents.value || !code.value.trim()) {
-            status.textContent = "请先选择 Agent 并粘贴配对码。";
-            return;
-          }
-          pair.disabled = true;
-          let stage = "version-check";
-          try {
-            const info = await api.ipc.invoke("version");
-            if (info?.build !== CONNECTOR_BUILD) {
-              record(api, stage, "mismatched");
-              status.textContent = `连接器 v${CONNECTOR_BUILD}：主进程版本未同步，配对未发送。`;
-              return;
-            }
-            stage = "read-agent-config";
-            record(api, stage);
-            const config = await ipcRenderer.invoke("a2a:config:get");
-            const selected = config.agents?.find(
-              (agent) => agent.agentId === agents.value,
-            );
-            const issue = workspaceIssue(selected);
-            if (issue) {
-              record(api, stage, "workspace_not_ready");
-              status.textContent = `${issue}。请在 Agent 编辑页完成配置并保存，再重新读取 Agent。`;
-              return;
-            }
-            status.textContent = "正在检查 AIMana 本机服务…";
-            stage = "native-service-status";
-            const state = await ipcRenderer.invoke("a2a:server:status");
-            record(
-              api,
-              stage,
-              ["running", "stopped", "starting", "error"].includes(state?.phase)
-                ? state.phase
-                : "invalid",
-            );
-            if (state?.phase !== "running") {
-              status.textContent = "正在启动已配置的 AIMana 本机服务…";
-              let restarted;
-              stage = "native-service-start";
-              try {
-                restarted = await ipcRenderer.invoke("a2a:server:retry");
-              } catch {
-                record(api, stage, "failed");
-                status.textContent = pairingErrors.service_unavailable;
-                return;
-              }
-              if (restarted?.phase !== "running") {
-                record(api, stage, "not_running");
-                status.textContent = pairingErrors.service_unavailable;
-                return;
-              }
-            }
-            let secret;
-            stage = "native-credential";
-            try {
-              secret = await ipcRenderer.invoke(
-                "a2a:token:reveal",
-                agents.value,
-              );
-            } catch {
-              record(api, stage, "unavailable");
-              status.textContent = pairingErrors.token_unavailable;
-              return;
-            }
-            if (!secret?.token) {
-              record(api, stage, "missing");
-              status.textContent = pairingErrors.missing_token;
-              return;
-            }
-            status.textContent = "正在与协调器配对并加密保存连接…";
-            stage = "coordinator-pair";
-            record(api, stage);
-            const result = await api.ipc.invoke("pair", {
-              code: code.value.trim(),
-              agentId: agents.value,
-              token: secret.token,
-            });
-            if (!result?.ok) {
-              record(
-                api,
-                stage,
-                result?.code && pairingErrors[result.code]
-                  ? result.code
-                  : "failed",
-              );
-              status.textContent =
-                result?.message || "连接插件返回不兼容，请重载插件后重试。";
-              return;
-            }
-            code.value = "";
-            record(api, "paired");
-            status.textContent = "配对成功，可以回 AI-Cooperation 派发任务。";
-          } catch {
-            record(api, stage, "native-call-failed");
-            status.textContent = `连接器 v${CONNECTOR_BUILD}：${stage} 调用失败；诊断已记录到连接插件日志。`;
+            status.textContent = "主进程未响应，请重载连接插件";
           } finally {
-            pair.disabled = false;
+            button.disabled = false;
           }
         };
-        root.append(
-          version,
-          text,
-          setup,
-          code,
-          agents,
-          refresh,
-          pair,
-          status,
-          details,
-        );
+        root.append(version, hint, code, button, status);
         return () => {
-          refresh.onclick = null;
-          pair.onclick = null;
+          button.onclick = null;
           root.replaceChildren();
         };
       },
     });
-    cleanup = () => handle.unregister();
+    cleanup = () => {
+      stopped = true;
+      clearInterval(heartbeat);
+      ipcRenderer.removeListener(`${prefix}:job`, jobs);
+      ipcRenderer.removeListener("cowork:conversation:event", events);
+      ipcRenderer.removeListener("agent-runtime:conversation:event", events);
+      panel.unregister();
+    };
   },
   stop() {
     cleanup?.();
-    cleanup = null;
+    cleanup = undefined;
   },
 };

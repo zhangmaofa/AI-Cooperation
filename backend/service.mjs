@@ -15,6 +15,7 @@ import {
 import { workspacePath } from "./workspace.mjs";
 import { AcpClient } from "./acp.mjs";
 import { Workflows } from "./workflows.mjs";
+import { CoworkClient } from "../src/cowork.mjs";
 
 const text = z.string().trim().min(1).max(20000);
 const planSchema = z.object({
@@ -24,7 +25,7 @@ const planSchema = z.object({
 const connectionSchema = z.object({
   id: z.string().max(100).optional(),
   name: z.string().trim().min(1).max(100),
-  kind: z.enum(["a2a", "codex", "acp"]),
+  kind: z.enum(["a2a", "codex", "acp", "aimana"]),
   args: z.array(z.string().max(4000)).max(50).optional(),
   endpoint: z.string().max(2000).optional(),
   command: z.string().max(2000).optional(),
@@ -106,7 +107,7 @@ export class DesktopService {
       workflows: this.store.workflows(),
       scheduler: this.collaboration.settings(),
       database: this.store.path,
-      version: "0.3.3",
+      version: "0.4.0",
     };
   }
   changed() {
@@ -114,6 +115,14 @@ export class DesktopService {
     this.notify(this.snapshot());
   }
   adapter(config) {
+    if (config.type === "aimana") {
+      const connection = this.store.connection(config.connectionId);
+      if (connection.endpoint !== config.endpoint)
+        throw new Error("Cowork 连接地址已变化，请核对原会话");
+      return new CoworkClient(config, {
+        tokenProvider: () => this.secret(connection.tokenRef),
+      });
+    }
     if (["codex", "acp"].includes(config.type))
       return new CodexExecutor({
         store: this.store,
@@ -211,7 +220,22 @@ export class DesktopService {
     const connection = this.store.connection(id);
     let result;
     try {
-      if (["codex", "acp"].includes(connection.kind))
+      if (connection.kind === "aimana") {
+        result = await new CoworkClient(connection, {
+          tokenProvider: () => this.secret(connection.tokenRef),
+        }).inspect();
+        if (
+          result.protocol !== "aico-cowork/1" ||
+          !Array.isArray(result.agents) ||
+          !Array.isArray(result.projects)
+        )
+          throw new Error("Cowork 插件协议不兼容");
+        connection.catalog = {
+          agents: result.agents,
+          projects: result.projects,
+        };
+        result.message = `已读取 ${result.agents.length} 个 Cowork Agent；请选择 Agent、模型和目录。实际执行仍需任务验证。`;
+      } else if (["codex", "acp"].includes(connection.kind))
         result = await this.client(
           id,
           connection.kind === "acp" ? "executor" : "coordinator",
@@ -297,6 +321,20 @@ export class DesktopService {
           model: connection.model,
           cwd,
           args: connection.args,
+        };
+      } else if (connection.kind === "aimana") {
+        if (!connection.agentId || !connection.model || !connection.cwd)
+          throw new Error("请先在 AIMana 连接中选择 Agent、模型和工作目录");
+        const cwd = await workspacePath(
+          parsed.workspace?.trim() || connection.cwd,
+        );
+        executor = {
+          type: "aimana",
+          connectionId: connection.id,
+          endpoint: connection.endpoint,
+          agentId: connection.agentId,
+          model: connection.model,
+          cwd,
         };
       } else if (connection.kind === "a2a") {
         if (!connection.tokenRef)
@@ -412,15 +450,20 @@ export class DesktopService {
         });
         this.store.saveTask(task);
       } else if (kind === "recover") {
+        const remoteId =
+          task.remoteTaskId ||
+          (task.executor.type === "aimana" && task.pending?.messageId
+            ? `cowork-${task.pending.messageId}`
+            : null);
         if (
           !["delivery_unknown", "cancel_requested"].includes(task.status) ||
-          !task.remoteTaskId
+          !remoteId
         )
           throw new Error("缺少可核对的原远端任务 ID");
         const adapter = this.adapter(task.executor);
         const result = adapter.recover
-          ? await adapter.recover(task.remoteTaskId)
-          : await adapter.poll(task.remoteTaskId);
+          ? await adapter.recover(remoteId)
+          : await adapter.poll(remoteId);
         const pendingId = task.pending?.messageId,
           cancelPending = task.status === "cancel_requested";
         this.relay.applyRemote(task, result);
@@ -627,6 +670,10 @@ export class DesktopService {
     }
     if (method === "connection.save") {
       const input = connectionSchema.parse(data);
+      if (input.kind === "aimana")
+        throw new Error(
+          "AIMana 通过连接插件配对，使用执行器配置选择 Agent 和模型",
+        );
       if (input.kind !== "a2a" && !input.command?.trim())
         throw new Error("请输入目标软件的程序路径");
       if (input.kind === "a2a" && input.endpoint)
@@ -666,6 +713,57 @@ export class DesktopService {
     }
     if (method === "connection.test")
       return this.testConnection(z.string().parse(data.id));
+    if (method === "connection.profile") {
+      const input = z
+        .object({
+          id: z.string(),
+          agentId: z.string(),
+          model: z.string(),
+          cwd: z.string(),
+          name: z.string().trim().min(1).max(100),
+          clone: z.boolean().default(false),
+        })
+        .parse(data);
+      const source = this.store.connection(input.id);
+      if (source.kind !== "aimana")
+        throw new Error("请选择 AIMana Cowork 连接");
+      // Refresh authoritative catalog before accepting any profile.
+      await this.testConnection(input.id);
+      const catalog = this.store.connection(input.id).catalog;
+      const agent = catalog.agents.find((a) => a.id === input.agentId);
+      if (!agent?.models?.some((m) => m.id === input.model))
+        throw new Error("该 Agent 当前没有这个可用模型，请刷新列表");
+      const cwd = await workspacePath(input.cwd);
+      if (
+        !catalog.projects.some(
+          (p) => path.resolve(p.cwd).toLowerCase() === cwd.toLowerCase(),
+        )
+      )
+        throw new Error("请选择 AIMana 中已有的工作目录");
+      if (
+        !input.clone &&
+        this.store
+          .tasks()
+          .some(
+            (t) =>
+              t.executor.connectionId === input.id &&
+              (active.has(t.status) || t.lease),
+          )
+      )
+        throw new Error("连接仍有任务持有会话，请保存为另一个执行器");
+      const id = input.clone ? randomUUID() : input.id;
+      this.store.saveConnection({
+        ...this.store.connection(input.id),
+        id,
+        name: input.name,
+        agentId: agent.id,
+        agentName: agent.name,
+        model: input.model,
+        cwd,
+      });
+      this.changed();
+      return { id };
+    }
     if (method === "task.analyze") return this.analyze(data);
     if (method === "task.create") return this.create(data);
     if (method === "task.action")

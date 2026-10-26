@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { writeFile, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { CoworkClient } from "../src/cowork.mjs";
 
 const equal = (a, b) => {
   const x = Buffer.from(a || ""),
@@ -66,6 +67,85 @@ export async function startBridge(
           return;
         }
         pairing.state = "processing";
+        if (data.transport === "cowork") {
+          if (
+            typeof data.token !== "string" ||
+            data.token.length < 32 ||
+            data.token.length > 200
+          )
+            throw new PairingFailure(
+              "invalid_connection_details",
+              "Cowork 连接信息无效",
+            );
+          let catalog;
+          try {
+            catalog = await new CoworkClient(
+              { endpoint: data.endpoint },
+              { tokenProvider: async () => data.token },
+            ).inspect();
+          } catch {
+            throw new PairingFailure(
+              "cowork_unavailable",
+              "无法连接 Cowork 插件。请保持 AIMana 窗口打开，并重载最新版连接插件。",
+            );
+          }
+          if (
+            catalog?.protocol !== "aico-cowork/1" ||
+            !Array.isArray(catalog.agents) ||
+            !Array.isArray(catalog.projects)
+          )
+            throw new PairingFailure(
+              "invalid_card",
+              "Cowork 插件返回不兼容的能力目录",
+            );
+          if (!saveSecret)
+            throw new PairingFailure(
+              "secure_storage_failed",
+              "请使用支持加密存储的桌面客户端",
+            );
+          let tokenRef;
+          try {
+            tokenRef = await saveSecret(data.token);
+          } catch {
+            throw new PairingFailure(
+              "secure_storage_failed",
+              "无法加密保存插件配对凭据",
+            );
+          }
+          const existing = service.store
+            .connections()
+            .find((c) => c.kind === "aimana" && c.endpoint === data.endpoint);
+          const id = existing?.id || randomBytes(16).toString("hex");
+          if (
+            existing &&
+            service.store
+              .tasks()
+              .some((t) => t.executor.connectionId === id && t.lease)
+          )
+            throw new PairingFailure(
+              "connection_save_failed",
+              "连接仍有任务，请先核对原会话后再配对",
+            );
+          service.store.saveConnection({
+            ...existing,
+            id,
+            kind: "aimana",
+            name: existing?.name || "本机 AIMana Cowork",
+            endpoint: data.endpoint,
+            tokenRef,
+            catalog: { agents: catalog.agents, projects: catalog.projects },
+            status: "connected",
+            lastMessage: "插件已连接，请选择 Agent、模型和工作目录",
+          });
+          service.changed();
+          pairing = {
+            state: "paired",
+            connectionId: id,
+            expires: Date.now() + 120000,
+          };
+          reply(200, { ok: true });
+          return;
+        }
         if (
           typeof data.agentId !== "string" ||
           !data.agentId ||

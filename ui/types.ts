@@ -44,8 +44,18 @@ export interface Task {
     connectionId?: string;
     cwd?: string;
     model?: string;
+    agentId?: string;
   };
-  result?: { text: string };
+  result?: {
+    text: string;
+    remote?: {
+      metadata?: {
+        actualModel?: string;
+        requestedModel?: string;
+        conversationId?: number;
+      };
+    };
+  };
   reviews: {
     decision: string;
     feedback: string;
@@ -57,7 +67,19 @@ export interface Task {
 export interface Connection {
   id: string;
   name: string;
-  kind: "a2a" | "codex" | "acp";
+  kind: "a2a" | "codex" | "acp" | "aimana";
+  agentId?: string;
+  agentName?: string;
+  catalog?: {
+    agents: {
+      id: string;
+      name: string;
+      engine: string;
+      defaultModel: string;
+      models: { id: string; name: string }[];
+    }[];
+    projects: { cwd: string; name: string }[];
+  };
   args?: string[];
   capabilities?: Record<string, boolean | string>;
   endpoint?: string;

@@ -8,6 +8,7 @@ import {
   WorkflowPage,
   SchedulerSettings,
   AimannaPairing,
+  AimannaProfile,
   McpIntegration,
 } from "./collaboration";
 import "./style.css";
@@ -157,7 +158,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.3.3",
+    version: "0.4.0",
   });
   const [page, setPage] = useState("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -537,7 +538,7 @@ function App() {
                 <Icon name="info" />
                 <p>
                   Codex 既可主调，也可执行；同一连接可绑定独立会话。AIMana 通过
-                  A2A 接收任务。连接测试不会自动派发任务。
+                  普通 Cowork 插件接收任务。连接测试不会自动派发任务。
                 </p>
               </div>
               <AimannaPairing call={call} />
@@ -675,12 +676,20 @@ function App() {
           }}
         />
       )}
-      {modal === "connection" && (
-        <ConnectionForm
+      {modal === "connection" && editing?.kind === "aimana" ? (
+        <AimannaProfile
           connection={editing}
           call={call}
           close={() => setModal(null)}
         />
+      ) : (
+        modal === "connection" && (
+          <ConnectionForm
+            connection={editing}
+            call={call}
+            close={() => setModal(null)}
+          />
+        )
       )}
     </div>
   );
@@ -1004,6 +1013,19 @@ function TaskDetail({
                 <code>{task.ownerThreadId}</code>
                 <span>执行上下文</span>
                 <code>{task.contextId || "派发后建立"}</code>
+                {task.executor.type === "aimana" && (
+                  <>
+                    <span>AIMana Agent</span>
+                    <code>{task.executor.agentId}</code>
+                    <span>请求模型</span>
+                    <code>{task.executor.model}</code>
+                    <span>AIMana 会话报告模型</span>
+                    <code>
+                      {task.result?.remote?.metadata?.actualModel ||
+                        "等待原生状态"}
+                    </code>
+                  </>
+                )}
                 <span>远端任务</span>
                 <code>{task.remoteTaskId || "尚未创建"}</code>
                 <span>任务 ID</span>
@@ -1220,7 +1242,7 @@ function NewTask({
         <p className="hint">
           {mode === "demo"
             ? "本地模拟任务流，不调用真实模型或修改项目文件。"
-            : "主调与执行可以都选 Codex，使用独立会话；也可以交给 AIMana 等 A2A 执行 Agent。"}
+            : "主调与执行可以都选 Codex，使用独立会话；也可以交给 AIMana Cowork、ACP 或 A2A 执行器。"}
         </p>
         <label>
           任务目标
@@ -1270,15 +1292,19 @@ function NewTask({
               >
                 <option value="">请选择执行 Agent</option>
                 {connections
-                  .filter((c) => ["a2a", "codex", "acp"].includes(c.kind))
+                  .filter((c) =>
+                    ["a2a", "codex", "acp", "aimana"].includes(c.kind),
+                  )
                   .map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name} ·{" "}
                       {c.kind === "codex"
                         ? "Codex"
-                        : c.kind === "acp"
-                          ? "ACP"
-                          : "A2A"}
+                        : c.kind === "aimana"
+                          ? "AIMana Cowork"
+                          : c.kind === "acp"
+                            ? "ACP"
+                            : "A2A"}
                     </option>
                   ))}
               </select>
@@ -1312,9 +1338,11 @@ function NewTask({
             <p className="hint">
               {selectedExecutor.kind === "codex"
                 ? "执行 Codex 使用工作区写入沙箱，主控只读，两者会话独立。"
-                : selectedExecutor.kind === "acp"
-                  ? "ACP 的实际文件权限由目标软件管理，请为本地执行器选择明确的工作目录。"
-                  : "该目录仅供协调器检查本地产物和防止任务冲突，不会更改 AIMana 内部的工作目录；请选择与远端实际配置对应的目录。"}
+                : selectedExecutor.kind === "aimana"
+                  ? "在指定 AIMana Agent 的普通 Cowork 会话中执行；权限请求在 AIMana 原界面处理。目录需已添加到 AIMana。"
+                  : selectedExecutor.kind === "acp"
+                    ? "ACP 的实际文件权限由目标软件管理，请为本地执行器选择明确的工作目录。"
+                    : "该目录仅供协调器检查本地产物和防止任务冲突，不会更改 AIMana 内部的工作目录；请选择与远端实际配置对应的目录。"}
             </p>
           </>
         )}
@@ -1472,13 +1500,25 @@ function AgentCard({
       <span className="small-label">
         {connection.kind === "codex"
           ? "主调 / 执行 · CODEX APP-SERVER"
-          : connection.kind === "acp"
-            ? "执行 · ACP v1"
-            : "执行 · A2A 0.3"}
+          : connection.kind === "aimana"
+            ? "执行 · AIMANA COWORK"
+            : connection.kind === "acp"
+              ? "执行 · ACP v1"
+              : "执行 · A2A 0.3"}
       </span>
       <p className="connection-address">
-        {connection.kind !== "a2a" ? connection.command : connection.endpoint}
+        {connection.kind === "aimana"
+          ? "AIMana++ · 普通 Cowork 会话桥"
+          : connection.kind !== "a2a"
+            ? connection.command
+            : connection.endpoint}
       </p>
+      {connection.kind === "aimana" && (
+        <p className="hint">
+          Agent：{connection.agentName || "待选择"} · 目录：
+          {connection.cwd || "待选择"}
+        </p>
+      )}
       <div className="agent-meta">
         <span>模型</span>
         <strong>
@@ -1537,7 +1577,7 @@ function ConnectionForm({
   close: () => void;
 }) {
   const [kind, setKind] = useState<"a2a" | "codex" | "acp">(
-    connection?.kind || "a2a",
+    connection?.kind === "aimana" ? "a2a" : connection?.kind || "a2a",
   );
   const [args, setArgs] = useState(JSON.stringify(connection?.args || []));
   const [argsError, setArgsError] = useState(false);

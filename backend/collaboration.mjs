@@ -54,7 +54,7 @@ export function capabilities(connection) {
     execute: true,
     coordinator: connection.kind === "codex",
     sameSession: true,
-    recover: connection.kind === "codex",
+    recover: ["codex", "aimana"].includes(connection.kind),
     cancel: true,
     verified: connection.status === "connected",
     ...connection.capabilities,

@@ -17,6 +17,7 @@ test("older bundled connector never replaces a newer installed build", async () 
     JSON.stringify({ id: "com.zhangmaofa.ai-cooperation", version: "0.3.1" }),
   );
   await writeFile(path.join(source, "index.js"), "old bundled code");
+  await writeFile(path.join(source, "gateway.cjs"), "gateway fixture");
   await writeFile(
     path.join(destination, "manifest.json"),
     JSON.stringify({ version: "0.3.2" }),

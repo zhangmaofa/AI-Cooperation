@@ -49,7 +49,14 @@ export class Workflows {
     goal = text.parse(goal);
     const agents = this.s.store
       .connections()
-      .map((c) => ({ id: c.id, name: c.name, protocol: c.kind }));
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        protocol: c.kind,
+        agent: c.agentName,
+        model: c.model,
+        workspace: c.cwd,
+      }));
     const response = await this.s
       .client(coordinatorId)
       .run(
