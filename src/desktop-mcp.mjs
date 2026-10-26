@@ -12,7 +12,7 @@ export async function startDesktopMcp() {
     path.join(process.env.LOCALAPPDATA || os.homedir(), "AI-Cooperation");
   const server = new McpServer({
     name: "ai-cooperation-desktop",
-    version: "0.4.0",
+    version: "0.4.1",
   });
   async function rpc(method, data) {
     const bridge = JSON.parse(

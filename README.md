@@ -2,7 +2,7 @@
 
 一个 Windows 本地 AI Agent 协调工作空间。Codex 主调制定计划与审核，AIMana 等执行 Agent 完成具体工作，协调器保存任务、会话绑定和返工记录。
 
-当前版本：**0.4.0 桌面预览版**。支持协作计划、子任务依赖、多个执行器调度、主控自动答疑、可靠消息记录、独立验证与总体审核。Codex 可分别担任主控和执行；执行协议包括 Codex app-server、A2A 0.3 和 ACP v1。新增普通 Cowork 的 Agent / 模型选择与 AIMana++ 会话桥。真实 AIMana 配对及执行、更多厂商的 ACP 兼容性仍需实测；不接管已有桌面聊天。
+当前版本：**0.4.1 桌面预览版**。支持协作计划、子任务依赖、多个执行器调度、主控自动答疑、可靠消息记录、独立验证与总体审核。Codex 可分别担任主控和执行；执行协议包括 Codex app-server、A2A 0.3 和 ACP v1。新增普通 Cowork 的 Agent / 模型选择与 AIMana++ 会话桥。真实 AIMana 配对及执行、更多厂商的 ACP 兼容性仍需实测；不接管已有桌面聊天。
 
 ![AI-Cooperation 任务工作台](docs/assets/desktop-home.png)
 
@@ -11,8 +11,10 @@
 本机打包输出：
 
 ```text
-E:\AI-Cooperation\release\0.4.0\win-unpacked\AI-Cooperation.exe
+E:\AI-Cooperation\release\0.4.1\win-unpacked\AI-Cooperation.exe
 ```
+
+0.4.1 将托盘、窗口及 Windows 程序文件图标统一为绿色协作节点标识，提供多尺寸 ICO 以适配系统缩放。图标源文件位于 desktop/assets/app.svg，可运行 node scripts/generate-icons.mjs 重新生成。AIMana 连接插件仍为 0.4.0，接入方式不变。
 
 双击即可运行。整个 `win-unpacked` 文件夹是运行包，包含 Electron、配套资源和独立 Node 运行时，不能只复制一个 exe。此目录不会提交到 Git。打包按版本分别输出，不覆盖正在运行的旧程序；更新时先保存或复制旧窗口中未提交的计划，再从托盘完全退出旧版并打开新版。
 
@@ -66,7 +68,7 @@ npm start
 
 0.4.0 改为通过 AIMana++ 调用已有的普通 Cowork 会话接口，**不需要 Workspace 灰度权限，也不需要启用 AIMana 原生 A2A 服务**。手工 A2A 连接仍供具有相应原生权限的软件使用。
 
-1. 保存旧版协调器中未提交的内容，从托盘完全退出旧版，打开本机 0.4.0 客户端。
+1. 保存旧版协调器中未提交的内容，从托盘完全退出旧版，打开本机 0.4.1 客户端。
 2. 在“Agent 连接 → 连接本机 AIMana”点击“安装 / 更新 AIMana 连接插件”。已有 AIMana++ 时只复制本连接器的 index.js、gateway.cjs 和 manifest.json。
 3. 在 AIMana++ 重载插件，确认显示“连接器 v0.4.0 · 普通 Cowork”。保持 AIMana 的本地主窗口打开。
 4. 在新版协调器生成两分钟配对码，在 AIMana++ 的 AI-Cooperation 区块粘贴后点击“配对普通 Cowork”。无需读取账号 token 或填写模型 API key。

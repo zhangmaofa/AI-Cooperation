@@ -21,6 +21,10 @@ await build({
       "package.json",
     ],
     extraResources: [{ from: process.execPath, to: "runtime/node.exe" }],
-    win: { executableName: "AI-Cooperation", signAndEditExecutable: false },
+    win: {
+      executableName: "AI-Cooperation",
+      icon: path.resolve("desktop/assets/app.ico"),
+      signExecutable: false,
+    },
   },
 });

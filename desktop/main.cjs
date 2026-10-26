@@ -2,7 +2,6 @@ const {
   app,
   BrowserWindow,
   ipcMain,
-  nativeImage,
   Tray,
   Menu,
   safeStorage,
@@ -68,6 +67,7 @@ function createWindow() {
     minWidth: 1120,
     minHeight: 740,
     title: "AI-Cooperation",
+    icon: path.join(__dirname, "assets", "app.ico"),
     backgroundColor: "#f6f7f9",
     autoHideMenuBar: true,
     webPreferences: {
@@ -259,11 +259,8 @@ else {
         app.quit();
       });
       createWindow();
-      // A small bundled PNG keeps the tray independent of external assets/network.
-      const icon = nativeImage.createFromDataURL(
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHUlEQVQ4T2Nk+P//PwMlgImBQjDwHxhGA0YNYDQAAKIkL/FQH66uAAAAAElFTkSuQmCC",
-      );
-      tray = new Tray(icon);
+      // Multi-resolution ICO lets Windows select a sharp image at the tray DPI.
+      tray = new Tray(path.join(__dirname, "assets", "app.ico"));
       tray.setToolTip("AI-Cooperation · 协调器");
       tray.setContextMenu(
         Menu.buildFromTemplate([
