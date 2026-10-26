@@ -89,6 +89,7 @@ test(
         accent: "purple",
         fontScale: 1.5,
         notifications: false,
+        autoOpenCodex: false,
       });
       await app.close();
       app = undefined;

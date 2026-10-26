@@ -24,6 +24,7 @@ test("preferences persist in SQLite, reject invalid UI payloads and leave existi
       accent: "blue",
       fontScale: 1.5,
       notifications: false,
+      autoOpenCodex: true,
     };
     await service.handle("preferences.save", wanted);
     for (const patch of [

@@ -5,6 +5,7 @@ import type {
   Conversation,
   Project,
   Snapshot,
+  ExecutionProgress,
 } from "./types";
 import { clearDraft, useDraftState } from "./drafts";
 type Call = <T>(method: string, data?: unknown) => Promise<T | undefined>;
@@ -32,6 +33,60 @@ const states: Record<string, string> = {
   failed: "本轮未完成",
   cancel_requested: "已请求停止",
 };
+function RunProgress({
+  value,
+  showText,
+}: {
+  value: ExecutionProgress;
+  showText: boolean;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const age = (at?: string) =>
+    Math.max(
+      0,
+      Math.floor((now - Date.parse(at || new Date(now).toISOString())) / 1000),
+    );
+  const duration = (seconds: number) =>
+    seconds < 60
+      ? `${seconds} 秒`
+      : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  const quiet = age(value.lastActivityAt);
+  return (
+    <section className="run-progress" aria-label="原生执行进度">
+      <div className="run-progress-title">
+        <strong>{value.stage || "正在等待原生回合进度"}</strong>
+        <span>已用时 {duration(age(value.startedAt))}</span>
+      </div>
+      <p className="hint">
+        最近收到进度：{duration(quiet)}前 · 已收到 {value.eventCount || 0}{" "}
+        条事件{value.toolCount ? ` · 工具活动 ${value.toolCount} 次` : ""}
+      </p>
+      {value.publicMessage && (
+        <div className="run-public-message">
+          <span className="hint">Agent 的阶段性进度</span>
+          <p>{value.publicMessage}</p>
+        </div>
+      )}
+      {showText && value.partialText && (
+        <div className="run-stream">
+          <span className="hint">正在返回的回复 · 本轮尚未确认结束</span>
+          <p>{value.partialText}</p>
+        </div>
+      )}
+      {value.warning && <p className="warning">{value.warning}</p>}
+      {quiet >= 45 && (
+        <p className="hint">
+          已有 {duration(quiet)}
+          未收到新进度。模型或工具可能仍在处理，可点击“核对原回合”读取原生状态；不会重复发送问题。
+        </p>
+      )}
+    </section>
+  );
+}
 function label(c: Connection) {
   return `${c.name} · ${names[c.kind]} · ${c.model || "软件默认模型"}`;
 }
@@ -423,9 +478,21 @@ export function ProjectConversation({
   const [busy, setBusy] = useState(false);
   const [createdId, setCreatedId] = useState("");
   const [answerTask, setAnswerTask] = useState("");
+  const [desktopNotice, setDesktopNotice] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const metadata = state.conversations?.find((c) => c.id === chatId);
   const activeConfig = detail?.config || config;
+  const desktopRoleId =
+    activeConfig.mode === "single"
+      ? activeConfig.executorIds[0]
+      : activeConfig.coordinatorId;
+  const canOpenCodex =
+    !!detail &&
+    state.connections.find((c) => c.id === desktopRoleId)?.kind === "codex";
+  const desktopThread =
+    activeConfig.mode === "single"
+      ? detail?.nativeThreadId || detail?.contextId
+      : detail?.threadId;
   const workflow = state.workflows?.find((w) => w.id === detail?.workflowId);
   const tasks =
     workflow?.taskIds
@@ -526,8 +593,28 @@ export function ProjectConversation({
           <button className="secondary" onClick={agents}>
             Agent 连接
           </button>
+          {canOpenCodex && (
+            <button
+              className="secondary"
+              disabled={!desktopThread || busy}
+              onClick={async () => {
+                const result = await call("desktop.open-conversation", {
+                  id: chatId,
+                });
+                if (result)
+                  setDesktopNotice("已请求 Codex 桌面显示同一个原生会话");
+              }}
+            >
+              在 Codex 桌面打开原对话
+            </button>
+          )}
         </div>
       </div>
+      {desktopNotice && (
+        <p className="hint" role="status">
+          {desktopNotice}
+        </p>
+      )}
       <div
         className="conversation-stream"
         aria-label="对话内容"
@@ -672,6 +759,17 @@ export function ProjectConversation({
                 <button className="secondary" onClick={() => openTask(task.id)}>
                   查看任务、会话与验证详情
                 </button>
+                {task.executor.type === "codex" && (
+                  <button
+                    className="secondary"
+                    disabled={!task.contextId}
+                    onClick={() =>
+                      void call("desktop.open-task", { id: task.id })
+                    }
+                  >
+                    在 Codex 桌面查看执行会话
+                  </button>
+                )}
               </details>
             ))}
             {workflow.status !== "accepted" && (
@@ -699,6 +797,39 @@ export function ProjectConversation({
           <p className="chat-status">{detail.queueReason}</p>
         )}
         {detail?.error && <div className="warning">{detail.error}</div>}
+        {detail?.progress &&
+          [
+            "working",
+            "sending",
+            "thinking",
+            "unknown",
+            "needs_user",
+            "cancel_requested",
+          ].includes(detail.status) && (
+            <RunProgress
+              value={detail.progress}
+              showText={activeConfig.mode === "single"}
+            />
+          )}
+        {detail &&
+          (detail.nativeThreadId || detail.contextId || detail.threadId) && (
+            <details className="native-session-details">
+              <summary>会话与连接信息</summary>
+              <p>
+                本对话使用协调器管理的原生会话，可点击上方按钮在 Codex
+                桌面查看同一份记录。任务运行期间请通过协调器继续派发，避免两个入口同时发送消息。
+              </p>
+              <p>
+                会话：
+                <code>
+                  {detail.nativeThreadId || detail.contextId || detail.threadId}
+                </code>
+              </p>
+              <p>
+                原生回合：<code>{detail.nativeTurnId || "尚未记录"}</code>
+              </p>
+            </details>
+          )}
         {detail &&
           activeConfig.mode === "single" &&
           state.connections.find((c) => c.id === activeConfig.executorIds[0])
@@ -713,9 +844,13 @@ export function ProjectConversation({
         {detail && detail.status !== "idle" && (
           <div className="chat-status" role="status">
             {states[detail.status] || detail.status}
-            {["unknown", "needs_user", "cancel_requested"].includes(
-              detail.status,
-            ) && (
+            {[
+              "unknown",
+              "needs_user",
+              "cancel_requested",
+              "working",
+              "thinking",
+            ].includes(detail.status) && (
               <button
                 className="secondary"
                 disabled={busy}

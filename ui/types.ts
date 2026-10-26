@@ -136,6 +136,11 @@ export interface Project {
   config: AgentConfiguration;
 }
 export interface Conversation {
+  progress?: ExecutionProgress;
+  nativeThreadId?: string;
+  nativeTurnId?: string;
+  contextId?: string;
+  threadId?: string;
   id: string;
   projectId: string;
   title: string;
@@ -151,6 +156,16 @@ export interface Conversation {
   error?: string;
   queueReason?: string;
   messages?: { id: string; role: string; text: string; at: string }[];
+}
+export interface ExecutionProgress {
+  startedAt?: string;
+  lastActivityAt?: string;
+  stage?: string;
+  eventCount?: number;
+  toolCount?: number;
+  publicMessage?: string;
+  partialText?: string;
+  warning?: string;
 }
 export interface WorkflowNode {
   id: string;

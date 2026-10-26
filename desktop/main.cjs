@@ -16,6 +16,11 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { installConnector } = require("./connector.cjs");
 const { notices } = require("./notifications.cjs");
+const {
+  conversationTarget,
+  taskTarget,
+  automaticTargets,
+} = require("./native-links.cjs");
 
 let window,
   worker,
@@ -33,6 +38,7 @@ function applyNativeTheme(mode) {
 let sequence = 0;
 const requests = new Map();
 const notifications = new Set();
+const openedDesktopTargets = new Set();
 const root = path.join(__dirname, "..");
 const dataDir =
   process.env.AICO_DATA_DIR ||
@@ -158,6 +164,22 @@ else {
           }
         }
         if (message.type === "ready" || message.type === "snapshot") {
+          for (const target of automaticTargets(latest, message.snapshot)) {
+            if (openedDesktopTargets.has(target.key)) continue;
+            openedDesktopTargets.add(target.key);
+            if (openedDesktopTargets.size > 512)
+              openedDesktopTargets.delete(
+                openedDesktopTargets.values().next().value,
+              );
+            shell
+              .openExternal(target.url)
+              .catch(() =>
+                window?.webContents.send(
+                  "cooperation:warning",
+                  "未能自动打开 Codex 桌面，请检查 codex:// 协议是否已注册，或手动点击打开原对话。",
+                ),
+              );
+          }
           const mode = message.snapshot.preferences?.mode || "system";
           if (previewMode === mode) previewMode = undefined;
           applyNativeTheme(previewMode || mode);
@@ -227,6 +249,8 @@ else {
       });
       const allowed = new Set([
         "snapshot",
+        "desktop.open-conversation",
+        "desktop.open-task",
         "project.save",
         "conversation.defaults",
         "conversation.create",
@@ -261,6 +285,23 @@ else {
         async (event, method, data = {}) => {
           if (event.sender !== window?.webContents || !allowed.has(method))
             throw new Error("不支持的操作");
+          if (
+            method === "desktop.open-conversation" ||
+            method === "desktop.open-task"
+          ) {
+            const target =
+              method === "desktop.open-conversation"
+                ? conversationTarget(latest, data.id)
+                : taskTarget(latest, data.id);
+            try {
+              await shell.openExternal(target.url);
+            } catch {
+              throw new Error(
+                "无法打开 Codex 桌面。请确认 Codex 已安装并注册 codex:// 协议；原会话与结果仍保留。",
+              );
+            }
+            return { launched: true, threadId: target.threadId };
+          }
           if (method === "preferences.preview") {
             if (!["system", "light", "dark"].includes(data.mode))
               throw new Error("无效的明暗模式");

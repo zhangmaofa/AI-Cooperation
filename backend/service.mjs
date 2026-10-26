@@ -116,7 +116,7 @@ export class DesktopService {
       scheduler: this.collaboration.settings(),
       preferences: preferences(this.store),
       database: this.store.path,
-      version: "0.7.0",
+      version: "0.7.1",
     };
   }
   changed() {
@@ -153,7 +153,9 @@ export class DesktopService {
       return new CodexExecutor({
         store: this.store,
         client: this.client(config.connectionId, "executor", config),
-        notify: () => this.changed(),
+        notify: (executionId) => {
+          if (!this.chats?.executionChanged(executionId)) this.changed();
+        },
         isClosed: () => this.closed,
       });
     if (config.type === "demo")

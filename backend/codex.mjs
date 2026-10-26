@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { finalText } from "./progress.mjs";
 
 export class CodexClient {
   constructor(connection, { spawnImpl = spawn, role = "coordinator" } = {}) {
@@ -43,7 +44,7 @@ export class CodexClient {
         clientInfo: {
           name: "ai_cooperation",
           title: "AI-Cooperation",
-          version: "0.7.0",
+          version: "0.7.1",
         },
       });
       this.send({ method: "initialized", params: {} });
@@ -65,12 +66,22 @@ export class CodexClient {
         this.pending.delete(id);
         reject(new Error(`Codex ${method} 响应超时`));
       }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        method,
+        threadId: params?.threadId,
+      });
       this.send({ id, method, params });
     });
   }
   message(message) {
     if (message.method && message.id !== undefined) {
+      this.turns.get(message.params?.threadId)?.onProgress?.({
+        type: "approval",
+        message: "Codex 请求交互权限，协调器未自动批准。",
+      });
       // Both profiles decline interactive escalation; workers can write only in the selected workspace sandbox.
       this.send({
         id: message.id,
@@ -87,6 +98,10 @@ export class CodexClient {
       if (!pending) return;
       clearTimeout(pending.timer);
       this.pending.delete(message.id);
+      if (pending.method === "turn/start" && message.result?.turn?.id) {
+        const turn = this.turns.get(pending.threadId);
+        if (turn) turn.turnId = message.result.turn.id;
+      }
       message.error
         ? pending.reject(
             new Error(
@@ -99,30 +114,88 @@ export class CodexClient {
     const params = message.params || {};
     const turn = this.turns.get(params.threadId);
     if (!turn) return;
+    const eventTurnId = params.turnId || params.turn?.id;
+    if (turn.turnId && eventTurnId && eventTurnId !== turn.turnId) return;
     if (message.method === "thread/tokenUsage/updated")
       turn.usage = params.tokenUsage?.last;
-    if (message.method === "item/started")
+    if (
+      message.method === "item/started" ||
+      message.method === "item/completed"
+    ) {
+      const item = params.item;
+      if (item?.type === "agentMessage") {
+        const id = item.id || "legacy";
+        turn.items.set(id, { ...turn.items.get(id), ...item });
+        turn.onProgress?.({
+          type: "message",
+          phase: item.phase,
+          text: item.text || "",
+          itemId: id,
+        });
+      } else
+        turn.onProgress?.({
+          type:
+            message.method === "item/started"
+              ? "item-started"
+              : "item-completed",
+          itemType: item?.type,
+        });
+    }
+    if (message.method === "item/agentMessage/delta") {
+      const id = params.itemId || "legacy";
+      const old = turn.items.get(id) || {
+        type: "agentMessage",
+        text: "",
+        phase: params.phase,
+      };
+      const item = { ...old, text: (old.text || "") + (params.delta || "") };
+      turn.items.set(id, item);
       turn.onProgress?.({
-        type: params.item?.type,
-        at: new Date().toISOString(),
+        type: "message",
+        phase: item.phase,
+        text: item.text,
+        itemId: id,
+      });
+    }
+    if (message.method === "error") {
+      turn.lastError = params.error?.message;
+      turn.onProgress?.({ type: "error", message: params.error?.message });
+    }
+    // These streams are activity signals only. Never forward reasoning or raw tool output.
+    if (message.method?.startsWith("item/reasoning/"))
+      turn.onProgress?.({ type: "item-activity", itemType: "reasoning" });
+    if (message.method === "item/commandExecution/outputDelta")
+      turn.onProgress?.({
+        type: "item-activity",
+        itemType: "commandExecution",
       });
     if (
       message.method === "item/completed" &&
       params.item?.type === "agentMessage"
     )
-      turn.text = params.item.text || turn.text;
+      turn.text = finalText([...turn.items.values()]);
     if (message.method === "turn/completed") {
       this.turns.delete(params.threadId);
       clearTimeout(turn.timer);
+      if (params.turn?.status === "interrupted") {
+        turn.resolve({
+          cancelled: true,
+          threadId: params.threadId,
+          text: finalText([...turn.items.values()]),
+        });
+        return;
+      }
+      const error = new Error(
+        `Codex 回合未完成：${params.turn?.status || "unknown"}${params.turn?.error?.message || turn.lastError ? "；" + (params.turn?.error?.message || turn.lastError) : ""}`,
+      );
+      if (params.turn?.status === "failed") error.terminalState = "failed";
       params.turn?.status === "completed"
         ? turn.resolve({
-            text: turn.text,
+            text: finalText([...turn.items.values()]) || turn.text,
             threadId: params.threadId,
             usage: turn.usage,
           })
-        : turn.reject(
-            new Error(`Codex 回合未完成：${params.turn?.status || "unknown"}`),
-          );
+        : turn.reject(error);
     }
   }
   async inspect() {
@@ -182,6 +255,7 @@ export class CodexClient {
     const result = new Promise((resolve, reject) => {
       const turn = {
         text: "",
+        items: new Map(),
         resolve,
         reject,
         timer: null,
@@ -209,6 +283,7 @@ export class CodexClient {
       if (this.turns.has(threadId))
         this.turns.get(threadId).turnId = reply.turn.id;
       onStarted?.({ threadId, turnId: reply.turn.id });
+      onProgress?.({ type: "started", turnId: reply.turn.id });
     } catch (error) {
       const turn = this.turns.get(threadId);
       if (turn) {
@@ -228,17 +303,47 @@ export class CodexClient {
     });
     const turn = result.thread?.turns?.find((t) => t.id === turnId);
     if (!turn) throw new Error("原执行轮次暂不可读取，保留待核对状态");
-    return {
+    const reply = {
       status: turn.status,
-      text: (turn.items || [])
-        .filter((i) => i.type === "agentMessage")
-        .map((i) => i.text || "")
-        .join("\n"),
+      text: finalText(turn.items || []),
+      publicMessage: (turn.items || [])
+        .filter((i) => i.type === "agentMessage" && i.phase === "commentary")
+        .at(-1)?.text,
+      error: turn.error?.message,
     };
+    const live = this.turns.get(threadId);
+    if (
+      live &&
+      live.turnId === turnId &&
+      ["completed", "interrupted", "failed"].includes(turn.status)
+    ) {
+      clearTimeout(live.timer);
+      this.turns.delete(threadId);
+      if (turn.status === "completed")
+        live.resolve({ text: reply.text, threadId });
+      else if (turn.status === "interrupted")
+        live.resolve({ cancelled: true, text: reply.text, threadId });
+      else {
+        const error = new Error(
+          `Codex 回合失败：${reply.error || "原生回合报告失败"}`,
+        );
+        error.terminalState = "failed";
+        live.reject(error);
+      }
+    }
+    return reply;
   }
   async interrupt(threadId, turnId) {
     await this.start();
     return this.request("turn/interrupt", { threadId, turnId });
+  }
+  async setThreadName(threadId, name) {
+    await this.start();
+    return this.request(
+      "thread/name/set",
+      { threadId, name: name.slice(0, 100) },
+      5000,
+    );
   }
   fail(error) {
     for (const pending of this.pending.values()) {

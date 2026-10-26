@@ -179,7 +179,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.7.0",
+    version: "0.7.1",
   });
   const [page, setPage] = useState("chats");
   const [projectId, setProjectId] = useState(() => {
@@ -230,6 +230,7 @@ function App() {
     state.preferences?.accent,
     state.preferences?.fontScale,
     state.preferences?.notifications,
+    state.preferences?.autoOpenCodex,
   ]);
   useEffect(() => {
     api

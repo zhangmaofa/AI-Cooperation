@@ -45,6 +45,9 @@ test(
         .getByRole("heading", { name: "本机 Codex", exact: true })
         .waitFor();
       await page.getByRole("button", { name: /设置与说明/ }).click();
+      await page
+        .getByLabel("本轮结束后自动打开 Codex", { exact: true })
+        .waitFor();
       await page.getByLabel("明暗模式").selectOption("dark");
       await page.getByRole("button", { name: "海洋蓝" }).click();
       await page.getByLabel("字体大小").selectOption("1.3");
@@ -55,6 +58,7 @@ test(
       );
       assert.equal(settings.preferences.accent, "blue");
       assert.equal(settings.preferences.fontScale, 1.3);
+      assert.equal(settings.preferences.autoOpenCodex, false);
       const workspace = path.join(dataDir, "project");
       await mkdir(workspace);
       await page.getByRole("button", { name: "新建项目", exact: true }).click();

@@ -336,6 +336,55 @@ footer[hidden] {
   font-size: calc(11px * var(--font-scale));
   padding: 14px 0;
 }
+.run-progress {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 18px;
+  margin: 20px 0;
+}
+.run-progress-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.8;
+}
+.run-progress-title > span {
+  color: var(--muted);
+}
+.run-progress > .hint {
+  margin-top: 8px;
+}
+.run-public-message,
+.run-stream {
+  padding: 12px;
+  background: var(--subtle);
+  border-radius: 8px;
+  margin-top: 14px;
+}
+.run-public-message p,
+.run-stream p {
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.9;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.native-session-details {
+  margin: 16px 0;
+  font-size: calc(10px * var(--font-scale));
+  color: var(--muted);
+  line-height: 1.9;
+}
+.native-session-details summary {
+  cursor: pointer;
+}
+.native-session-details p {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
 .conversation-composer {
   position: sticky;
   bottom: 12px;

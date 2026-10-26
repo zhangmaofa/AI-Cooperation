@@ -5,6 +5,7 @@ import { workspacePath, overlaps } from "./workspace.mjs";
 import { parseModelJSON } from "./codex.mjs";
 import { nodeSchema, validateGraph } from "./workflows.mjs";
 import { resultText } from "../src/a2a.mjs";
+import { bufferedProgress } from "./progress.mjs";
 
 const text = z.string().trim().min(1).max(20000);
 const configSchema = z.object({
@@ -239,6 +240,16 @@ export class Conversations {
     if (chat.title === "新对话")
       chat.title = value.text.replace(/\s+/g, " ").slice(0, 45);
     chat.error = null;
+    chat.progress = {
+      startedAt: stamp(),
+      lastActivityAt: stamp(),
+      stage:
+        chat.config.mode === "single"
+          ? "消息已保存，等待派发"
+          : "消息已保存，等待主调",
+      eventCount: 0,
+    };
+    chat.nativeTurnId = null;
     if (goal && chat.config.mode === "distributed") chat.plan = null;
     chat.pending = {
       messageId,
@@ -283,15 +294,19 @@ export class Conversations {
     } catch (error) {
       if (!this.s.closed) {
         const chat = this.s.store.conversation(id);
-        chat.status = chat.pending?.response ? "failed" : "unknown";
+        chat.status =
+          chat.pending?.response || error.terminalState === "failed"
+            ? "failed"
+            : "unknown";
         chat.error = error.message;
         this.append(
           chat,
           "system",
-          `${chat.pending?.response ? "本轮返回内容未能应用" : "本轮结果待核对，不会自动重发"}：${error.message}`,
+          `${chat.pending?.response ? "本轮返回内容未能应用" : error.terminalState === "failed" ? "原生回合已确认失败" : "本轮结果待核对，不会自动重发"}：${error.message}`,
           `${chat.pending?.messageId}:error`,
         );
-        if (chat.pending?.response) chat.pending = null;
+        if (chat.pending?.response || error.terminalState === "failed")
+          chat.pending = null;
         this.save(chat);
       }
     } finally {
@@ -352,6 +367,7 @@ export class Conversations {
         contextId: chat.contextId,
         taskId: pending.replyTaskId,
         directChat: true,
+        threadName: chat.title,
       });
       if (!this.s.closed)
         this.applyDirect(this.s.store.conversation(chat.id), result);
@@ -360,6 +376,10 @@ export class Conversations {
     }
   }
   applyDirect(chat, result) {
+    if (result.metadata?.progress) chat.progress = result.metadata.progress;
+    if (result.metadata?.turnId) chat.nativeTurnId = result.metadata.turnId;
+    if (result.metadata?.threadId)
+      chat.nativeThreadId = result.metadata.threadId;
     if (
       result.contextId &&
       chat.contextId &&
@@ -417,6 +437,7 @@ export class Conversations {
     );
     if (!chat.threadId) {
       chat.threadId = await client.openThread();
+      void client.setThreadName?.(chat.threadId, chat.title)?.catch(() => {});
       this.save(chat);
       p.prepared = true;
     }
@@ -456,24 +477,43 @@ export class Conversations {
                 }),
               },
             )}`;
-    const response = await this.s.collaboration.decision(() =>
-      this.s
-        .client(
-          chat.config.coordinatorId,
-          "coordinator",
-          chat.coordinatorProfile,
-        )
-        .run(prompt, chat.threadId, {
-          threadPrepared: Boolean(p.prepared),
-          onStarted: ({ turnId }) => {
-            if (!this.s.closed) {
-              const current = this.s.store.conversation(chat.id);
-              current.pending.turnId = turnId;
-              this.save(current);
-            }
-          },
-        }),
+    const reporter = bufferedProgress(
+      chat.progress,
+      (progress) => {
+        const current = this.s.store.conversation(chat.id);
+        if (current.pending?.messageId !== p.messageId) return;
+        current.progress = progress;
+        this.save(current);
+      },
+      () => this.s.closed,
     );
+    let response;
+    try {
+      response = await this.s.collaboration.decision(() =>
+        this.s
+          .client(
+            chat.config.coordinatorId,
+            "coordinator",
+            chat.coordinatorProfile,
+          )
+          .run(prompt, chat.threadId, {
+            threadPrepared: Boolean(p.prepared),
+            onProgress: reporter.update,
+            onStarted: ({ turnId }) => {
+              if (!this.s.closed) {
+                const current = this.s.store.conversation(chat.id);
+                current.pending.turnId = turnId;
+                current.nativeTurnId = turnId;
+                current.nativeThreadId = chat.threadId;
+                this.save(current);
+              }
+            },
+          }),
+      );
+    } finally {
+      reporter.flush();
+      reporter.close();
+    }
     if (this.s.closed) return;
     chat = this.s.store.conversation(chat.id);
     if (response.needsUser || response.cancelled) {
@@ -599,10 +639,20 @@ export class Conversations {
     }
   }
   async poll(id, recover = false) {
-    if (this.busy.has(id)) return;
-    this.busy.add(id);
+    const alreadyBusy = this.busy.has(id);
+    const initial = this.s.store.conversation(id);
+    if (
+      alreadyBusy &&
+      !(
+        recover &&
+        initial.config.mode === "distributed" &&
+        initial.pending?.turnId
+      )
+    )
+      return;
+    if (!alreadyBusy) this.busy.add(id);
     try {
-      const chat = this.s.store.conversation(id);
+      let chat = this.s.store.conversation(id);
       if (chat.config.mode === "distributed") {
         if (!recover || !chat.pending?.turnId)
           throw new Error(
@@ -615,6 +665,23 @@ export class Conversations {
             chat.coordinatorProfile,
           )
           .readTurn(chat.threadId, chat.pending.turnId);
+        const fresh = this.s.store.conversation(id);
+        if (fresh.pending?.messageId !== chat.pending?.messageId) return;
+        chat = fresh;
+        if (
+          ["inProgress", "in_progress", "working"].includes(response.status)
+        ) {
+          chat.progress = {
+            ...chat.progress,
+            lastActivityAt: new Date().toISOString(),
+            stage: "已核对：主调原生回合仍在进行",
+            publicMessage:
+              response.publicMessage || chat.progress?.publicMessage,
+          };
+          this.save(chat);
+          return;
+        }
+        if (alreadyBusy) return; // The original live job receives the reconciled completion.
         if (response.status !== "completed")
           throw new Error(`原主调回合为 ${response.status}，不会重新发送`);
         chat.pending.response = response;
@@ -640,7 +707,7 @@ export class Conversations {
       }
       if (recover) throw error;
     } finally {
-      this.busy.delete(id);
+      if (!alreadyBusy) this.busy.delete(id);
     }
   }
   async cancel(id) {
@@ -713,6 +780,31 @@ export class Conversations {
         if (changed) this.save(chat);
       }
     }
+  }
+  executionChanged(executionId) {
+    if (!executionId || this.s.closed) return false;
+    const run = this.s.store.execution(executionId);
+    let updated = false;
+    for (const chat of this.s.store.conversations()) {
+      if (
+        chat.config.mode !== "single" ||
+        !["sending", "working", "cancel_requested", "unknown"].includes(
+          chat.status,
+        )
+      )
+        continue;
+      if (
+        chat.remoteTaskId !== executionId &&
+        `codex-${chat.pending?.messageId}` !== executionId
+      )
+        continue;
+      chat.progress = run.progress;
+      chat.nativeThreadId = run.contextId;
+      chat.nativeTurnId = run.turnId;
+      this.save(chat);
+      updated = true;
+    }
+    return updated;
   }
   snapshot() {
     return this.s.store

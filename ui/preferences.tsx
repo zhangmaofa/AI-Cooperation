@@ -7,12 +7,14 @@ export interface Preferences {
   accent: "green" | "blue" | "purple" | "orange";
   fontScale: 1 | 1.15 | 1.3 | 1.5;
   notifications: boolean;
+  autoOpenCodex: boolean;
 }
 export const defaults: Preferences = {
   mode: "system",
   accent: "green",
   fontScale: 1.15,
   notifications: true,
+  autoOpenCodex: false,
 };
 const cacheKey = "ai-cooperation:preferences:v1";
 let current = defaults;
@@ -43,7 +45,11 @@ try {
     [1, 1.15, 1.3, 1.5].includes(value.fontScale) &&
     typeof value.notifications === "boolean"
   )
-    current = value;
+    current = {
+      ...defaults,
+      ...value,
+      autoOpenCodex: value.autoOpenCodex === true,
+    };
 } catch {}
 applyPreferences(current);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -67,7 +73,13 @@ export function AppearanceSettings({
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   useEffect(() => {
     setDraft(saved);
-  }, [saved.mode, saved.accent, saved.fontScale, saved.notifications]);
+  }, [
+    saved.mode,
+    saved.accent,
+    saved.fontScale,
+    saved.notifications,
+    saved.autoOpenCodex,
+  ]);
   useEffect(() => {
     applyPreferences(draft);
   }, [draft]);
@@ -198,6 +210,23 @@ export function AppearanceSettings({
                 onChange={(e) => update({ notifications: e.target.checked })}
               />
               启用桌面通知
+            </label>
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Codex 桌面显示</strong>
+              <p>
+                本轮结束或需要你答复后，自动在 Codex
+                桌面打开同一个原生会话。不会重新发送问题。
+              </p>
+            </div>
+            <label className="checkbox-label notification-choice">
+              <input
+                type="checkbox"
+                checked={draft.autoOpenCodex}
+                onChange={(e) => update({ autoOpenCodex: e.target.checked })}
+              />
+              本轮结束后自动打开 Codex
             </label>
           </div>
           <div className="button-row settings-actions">

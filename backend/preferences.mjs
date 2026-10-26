@@ -11,6 +11,7 @@ export const preferenceSchema = z
       z.literal(1.5),
     ]),
     notifications: z.boolean(),
+    autoOpenCodex: z.boolean().default(false),
   })
   .strict();
 export const defaultPreferences = Object.freeze({
@@ -18,6 +19,7 @@ export const defaultPreferences = Object.freeze({
   accent: "green",
   fontScale: 1.15,
   notifications: true,
+  autoOpenCodex: false,
 });
 export function preferences(store) {
   const saved = preferenceSchema.safeParse(
