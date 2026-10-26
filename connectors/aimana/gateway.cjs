@@ -3,7 +3,7 @@ const fs = require("node:fs"),
   path = require("node:path"),
   crypto = require("node:crypto");
 const { createServer } = require("node:http");
-const BUILD = "0.5.0";
+const BUILD = "0.7.0";
 const terminal = new Set(["completed", "input-required", "failed", "canceled"]);
 function result(run) {
   return {
@@ -128,6 +128,7 @@ exports.start = function (api) {
             data.contextId,
             data.taskId,
             data.profile,
+            ...(data.directChat === true ? [true] : []),
           ]),
         )
         .digest("hex");
@@ -171,6 +172,7 @@ exports.start = function (api) {
         id,
         requestHash,
         profile,
+        directChat: data.directChat === true,
         contextId: data.contextId || `pending-${id}`,
         conversationId: context?.conversationId,
         turnId: crypto.randomUUID(),

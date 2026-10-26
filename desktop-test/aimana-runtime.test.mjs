@@ -67,7 +67,7 @@ test(
       await page.locator("#aimanapp-panel").waitFor({ state: "attached" });
       await page.keyboard.press("Control+Alt+u");
       await page
-        .getByText("连接器 v0.5.0 · 普通 Cowork", { exact: true })
+        .getByText("连接器 v0.7.0 · 普通 Cowork", { exact: true })
         .waitFor();
       const pair = bridge.startPairing();
       await page.getByLabel("AI-Cooperation 配对码").fill(pair.code);
@@ -270,6 +270,37 @@ test(
         (v) => v.status.state === "canceled",
       );
       const snapshot = JSON.stringify(service.snapshot());
+      const direct = await client.send({
+        messageId: "direct-chat-fixture",
+        text: "直接帮我设计并完成",
+        directChat: true,
+      });
+      const directSession = (
+        await app.evaluate(() => global.fixture.snapshot())
+      ).sessions.find((s) => s.id === direct.metadata.conversationId);
+      assert.match(directSession.lastPrompt, /直接对话/);
+      assert.doesNotMatch(directSession.lastPrompt, /完成后等待主控审核/);
+      await app.evaluate(
+        (_e, id) =>
+          global.fixture.finish(id, {
+            status: "completed",
+            summary: "direct reply",
+          }),
+        directSession.id,
+      );
+      await until(
+        () => client.poll(direct.id),
+        (v) => v.status.state === "completed",
+      );
+      const follow = await client.send({
+        messageId: "direct-chat-followup",
+        text: "继续检查",
+        contextId: direct.contextId,
+        directChat: true,
+      });
+      assert.equal(follow.contextId, direct.contextId);
+      assert.equal(follow.metadata.conversationId, directSession.id);
+      await client.cancel(follow.id);
       assert.equal(snapshot.includes(vault.get("fixture-ref")), false);
       const journal = await readFile(
         path.join(

@@ -1,6 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Connection, Contract, Evidence, Snapshot, Task } from "./types";
+import type {
+  Connection,
+  Contract,
+  Evidence,
+  Snapshot,
+  Task,
+  Project,
+} from "./types";
+import {
+  DefaultConversationSettings,
+  ProjectNavigation,
+  ProjectDialog,
+  ProjectConversation,
+} from "./conversations";
 import {
   ContractFields,
   defaultContract,
@@ -13,6 +26,7 @@ import {
 } from "./collaboration";
 import "./theme.css";
 import "./style.css";
+import "./conversations.css";
 import { useDraftState, clearDraft } from "./drafts";
 import {
   AppearanceSettings,
@@ -165,9 +179,39 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.6.0",
+    version: "0.7.0",
   });
-  const [page, setPage] = useState("tasks");
+  const [page, setPage] = useState("chats");
+  const [projectId, setProjectId] = useState(() => {
+    try {
+      return localStorage.getItem("ai-cooperation:project") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [chatId, setChatId] = useState(() => {
+    try {
+      return localStorage.getItem("ai-cooperation:conversation") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [projectDialog, setProjectDialog] = useState<
+    Project | null | undefined
+  >(undefined);
+  const snapshotRef = useRef(state);
+  snapshotRef.current = state;
+  function openConversation(id: string, conversation = "") {
+    setProjectId(id);
+    setChatId(conversation);
+    setPage("chats");
+  }
+  useEffect(() => {
+    try {
+      localStorage.setItem("ai-cooperation:project", projectId);
+      localStorage.setItem("ai-cooperation:conversation", chatId);
+    } catch {}
+  }, [projectId, chatId]);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -197,6 +241,18 @@ function App() {
     });
     const stop = api.onOffline(() => setOffline(true));
     const stopNavigate = api.onNavigate((value) => {
+      const chat = snapshotRef.current.conversations?.find(
+        (c) =>
+          c.id === value.id ||
+          c.workflowIds.includes(value.id) ||
+          (value.page === "tasks" &&
+            snapshotRef.current.tasks.find((t) => t.id === value.id)
+              ?.workflowId === c.workflowId),
+      );
+      if (chat) {
+        openConversation(chat.projectId, chat.id);
+        return;
+      }
       if (value.page === "tasks") {
         setSelected(value.id);
         setPage("tasks");
@@ -247,6 +303,8 @@ function App() {
     setPending(false);
   }
   const current = state.tasks.find((t) => t.id === selected);
+  const activeProject =
+    state.projects?.find((p) => p.id === projectId) || state.projects?.[0];
   const actionable = state.tasks.filter((t) =>
     [
       "needs_input",
@@ -290,6 +348,13 @@ function App() {
         <div className="nav-caption">工作空间</div>
         <nav>
           <button
+            className={page === "chats" ? "active" : ""}
+            onClick={() => setPage("chats")}
+          >
+            <Icon name="chat" />
+            项目与对话
+          </button>
+          <button
             className={page === "tasks" ? "active" : ""}
             onClick={() => setPage("tasks")}
           >
@@ -320,7 +385,14 @@ function App() {
             设置与说明
           </button>
         </nav>
-        <div className="sidebar-note">
+        <ProjectNavigation
+          state={state}
+          projectId={activeProject?.id || ""}
+          chatId={page === "chats" ? chatId : ""}
+          open={openConversation}
+          create={() => setProjectDialog(null)}
+        />
+        <div className="sidebar-note" hidden>
           <span className="small-label">协作方式</span>
           <strong>一个目标，多个 Agent</strong>
           <p>主调制定计划与审核，执行 Agent 完成具体工作。</p>
@@ -344,13 +416,15 @@ function App() {
         <header className="topbar">
           <span>
             工作空间 <b>/</b>{" "}
-            {page === "tasks"
-              ? "任务工作台"
-              : page === "agents"
-                ? "Agent 连接"
-                : page === "workflows"
-                  ? "协作计划"
-                  : "设置与说明"}
+            {page === "chats"
+              ? activeProject?.name || "项目与对话"
+              : page === "tasks"
+                ? "任务工作台"
+                : page === "agents"
+                  ? "Agent 连接"
+                  : page === "workflows"
+                    ? "协作计划"
+                    : "设置与说明"}
           </span>
           <div>
             <span className="local-label">
@@ -360,12 +434,48 @@ function App() {
             <span className="avatar">Z</span>
           </div>
         </header>
-        <div className="content">
+        <div
+          className={`content ${page === "chats" ? "conversation-content" : ""}`}
+        >
           {offline && (
             <div className="warning">
               后台进程已停止。请重启应用后核对远端任务状态，避免重复派发。
             </div>
           )}
+          {page === "chats" &&
+            (activeProject ? (
+              <ProjectConversation
+                key={chatId || `new-${activeProject.id}`}
+                project={activeProject}
+                chatId={chatId}
+                state={state}
+                call={call}
+                select={(id) => openConversation(activeProject.id, id)}
+                settings={() => setProjectDialog(activeProject)}
+                agents={() => setPage("agents")}
+                openTask={(id) => {
+                  setSelected(id);
+                  setPage("tasks");
+                }}
+              />
+            ) : (
+              <section className="project-empty">
+                <div className="brand-mark">
+                  <Icon name="nodes" size={26} />
+                </div>
+                <h1>从一个项目开始</h1>
+                <p>保存工作目录，让 Agent 在项目里持续对话与协作。</p>
+                <button
+                  className="primary"
+                  onClick={() => setProjectDialog(null)}
+                >
+                  添加第一个项目
+                </button>
+                <p className="hint">
+                  支持单 Agent 直接执行，也支持主调与多个执行器协作。
+                </p>
+              </section>
+            ))}
           {page === "tasks" && (
             <>
               <div className="page-heading">
@@ -626,6 +736,11 @@ function App() {
                 </div>
               </div>
               <AppearanceSettings state={state} call={call} />
+              <DefaultConversationSettings
+                state={state}
+                call={call}
+                agents={() => setPage("agents")}
+              />
               <section className="panel settings-panel">
                 <h2>运行与存储</h2>
                 <div className="setting-row">
@@ -680,7 +795,7 @@ function App() {
               </button>
             </>
           )}
-          <footer>
+          <footer hidden={page === "chats"}>
             <span>AI-Cooperation · 本地 Agent 协同工作空间</span>
             <span>
               <i className="dot" /> SQLite 已启用
@@ -711,6 +826,18 @@ function App() {
             setSelected(task.id);
             setPage("tasks");
             setModal(null);
+          }}
+        />
+      )}
+      {projectDialog !== undefined && (
+        <ProjectDialog
+          project={projectDialog || undefined}
+          state={state}
+          call={call}
+          close={() => setProjectDialog(undefined)}
+          saved={(project) => {
+            setProjectDialog(undefined);
+            openConversation(project.id);
           }}
         />
       )}
@@ -1275,7 +1402,7 @@ function NewTask({
       plan: string[];
       acceptance: string[];
       threadId: string;
-    }>("task.analyze", { goal, coordinatorId });
+    }>("task.analyze", { goal, coordinatorId, workspace });
     if (result) {
       setPlan(result.plan.join("\n"));
       setAcceptance(result.acceptance.join("\n"));

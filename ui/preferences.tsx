@@ -224,9 +224,9 @@ export function AppearanceSettings({
         <h2>草稿管理</h2>
         <div className="setting-row">
           <div>
-            <strong>未提交的任务与协作计划</strong>
+            <strong>未提交的消息、任务与协作计划</strong>
             <p>
-              草稿保存在当前电脑。清理仅移除未提交表单，已创建的任务、会话与历史记录保留。
+              草稿保存在当前电脑。清理仅移除未发送消息与未提交表单，已创建的任务、对话与历史记录保留。
             </p>
           </div>
           <button className="secondary" onClick={() => setConfirmClear(true)}>

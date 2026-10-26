@@ -49,6 +49,9 @@ export class CodexExecutor {
     };
     this.store.saveExecution(run); // Save the execution thread before starting model work.
     const prompt = `你是 AI-Cooperation 的执行 Agent。按照所给任务、计划和反馈执行。工作区由宿主指定，所有修改限定在该工作区内。不得扩大权限、绕过沙箱或自行接受任务验收。汇报真实修改与验证结果；信息不足时提出具体疑问。最终答复只返回 JSON：{"status":"completed 或 needs_input","summary":"真实结果与证据","question":"有疑问时填写"}。completed 只表示本轮执行结束，仍须主调审核。以下是任务或主调的补充数据：\n${request.text}`;
+    const effectivePrompt = request.directChat
+      ? `你正在与用户直接对话，负责理解需求、制定方案、在指定工作目录内执行并验证。按项目说明工作，不扩大权限；不需要虚构主调或等待另一个 Agent 验收。普通问题直接回答，有疑问直接向用户提问，准确说明实际修改与验证情况。用户消息：\n${request.text}`
+      : prompt;
     const finish = (state, value, usage) => {
       if (this.isClosed()) return;
       const latest = this.store.execution(id);
@@ -62,7 +65,7 @@ export class CodexExecutor {
       this.notify();
     };
     this.client
-      .run(prompt, contextId, {
+      .run(effectivePrompt, contextId, {
         threadPrepared: true,
         onStarted: ({ turnId }) => {
           if (!this.isClosed())

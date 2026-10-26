@@ -45,5 +45,25 @@ exports.notices = function (previous, next) {
         title: "协作计划已完成总体验收",
         body: w.goal.slice(0, 140),
       });
+  for (const chat of next.conversations || []) {
+    const old = previous.conversations?.find((c) => c.id === chat.id);
+    if (
+      old &&
+      old.status !== chat.status &&
+      (["unknown", "needs_user", "needs_input", "failed"].includes(
+        chat.status,
+      ) ||
+        (chat.status === "idle" &&
+          ["working", "thinking"].includes(old.status)))
+    )
+      result.push({
+        id: chat.id,
+        page: "conversations",
+        title: ["idle", "needs_input"].includes(chat.status)
+          ? "Agent 已回复"
+          : "项目对话需要处理",
+        body: chat.title.slice(0, 140),
+      });
+  }
   return result;
 };

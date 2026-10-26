@@ -81,6 +81,7 @@ const start = (_event, input) => {
   )
     throw new Error("fixture dispatch mismatch");
   s.isRunning = true;
+  s.lastPrompt = input.prompt;
   s.turnId = input.turnId;
   s.sdkSessionId = `sdk-${s.id}`;
   starts++;

@@ -25,6 +25,7 @@ test(
     const errors = [];
     try {
       let page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       page.on("pageerror", (error) => errors.push(error.message));
       await mkdir("outputs", { recursive: true });
       await page.getByRole("heading", { name: /任务工作台/ }).waitFor();
@@ -74,6 +75,7 @@ test(
       await app.close();
       app = await launch();
       page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       await page
         .getByText("整理项目交付清单，并补充验证步骤", { exact: true })
         .waitFor();

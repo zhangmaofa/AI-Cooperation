@@ -73,6 +73,8 @@ export interface Connection {
   agentId?: string;
   agentName?: string;
   catalog?: {
+    build?: string;
+    features?: { directChat?: boolean };
     agents: {
       id: string;
       name: string;
@@ -93,6 +95,9 @@ export interface Connection {
   hasToken?: boolean;
 }
 export interface Snapshot {
+  projects?: Project[];
+  conversations?: Conversation[];
+  conversationDefaults?: AgentConfiguration;
   preferences?: import("./preferences").Preferences;
   workflows?: Workflow[];
   messages?: {
@@ -117,6 +122,35 @@ export interface Contract {
   maxTokens: number;
   stopOnNoProgress: boolean;
   isolateWorktree?: boolean;
+}
+export interface AgentConfiguration {
+  mode: "single" | "distributed";
+  coordinatorId: string;
+  executorIds: string[];
+  maxRounds: number;
+}
+export interface Project {
+  id: string;
+  name: string;
+  cwd: string;
+  config: AgentConfiguration;
+}
+export interface Conversation {
+  id: string;
+  projectId: string;
+  title: string;
+  workspace: string;
+  config: AgentConfiguration;
+  status: string;
+  revision: number;
+  updatedAt: string;
+  workflowId?: string;
+  workflowIds: string[];
+  planGoal?: string;
+  plan?: { acceptance: string[]; nodes: WorkflowNode[] };
+  error?: string;
+  queueReason?: string;
+  messages?: { id: string; role: string; text: string; at: string }[];
 }
 export interface WorkflowNode {
   id: string;

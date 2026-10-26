@@ -31,6 +31,7 @@ test(
     try {
       assert.equal(await app.evaluate(({ app }) => app.isPackaged), true);
       const page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       await page.getByRole("heading", { name: /任务工作台/ }).waitFor();
       await page.getByRole("button", { name: "运行模拟演示" }).click();
       await page.getByText("Agent 的疑问", { exact: true }).waitFor();
@@ -54,6 +55,35 @@ test(
       );
       assert.equal(settings.preferences.accent, "blue");
       assert.equal(settings.preferences.fontScale, 1.3);
+      const workspace = path.join(dataDir, "project");
+      await mkdir(workspace);
+      await page.getByRole("button", { name: "新建项目", exact: true }).click();
+      const dialog = page.getByRole("dialog", {
+        name: "新建项目",
+        exact: true,
+      });
+      await dialog.getByLabel("项目名称").fill("打包项目");
+      await dialog.getByLabel("项目工作目录").fill(workspace);
+      await dialog
+        .getByLabel("对话执行 Agent", { exact: true })
+        .selectOption("codex-local");
+      await dialog
+        .getByRole("button", { name: "保存项目", exact: true })
+        .click();
+      await page
+        .getByRole("heading", { name: "今天想在这个项目里完成什么？" })
+        .waitFor();
+      const project = await page.evaluate(
+        async () => (await window.cooperation.request("snapshot")).projects[0],
+      );
+      assert.equal(project.cwd, workspace);
+      const conversation = await page.evaluate(
+        (projectId) =>
+          window.cooperation.request("conversation.create", { projectId }),
+        project.id,
+      );
+      assert.equal(conversation.workspace, workspace);
+      assert.equal(conversation.config.mode, "single");
       await mkdir("outputs", { recursive: true });
       await page.screenshot({
         path: path.resolve("outputs", "desktop-packaged.png"),

@@ -24,6 +24,7 @@ test(
     });
     try {
       const page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.getByRole("button", { name: /协作计划/ }).click();

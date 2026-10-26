@@ -18,7 +18,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, dedupe TEXT UNIQUE NOT NULL, task_id TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-      PRAGMA user_version = 3;
+      CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_messages(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id), payload TEXT NOT NULL);
+      PRAGMA user_version = 4;
     `);
   }
   saveTask(task) {
@@ -180,6 +183,52 @@ export class Store {
         "INSERT INTO workflows VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
       )
       .run(workflow.id, JSON.stringify(workflow));
+  }
+  projects() {
+    return this.db
+      .prepare("SELECT payload FROM projects ORDER BY rowid DESC")
+      .all()
+      .map((r) => JSON.parse(r.payload));
+  }
+  saveProject(value) {
+    this.db
+      .prepare(
+        "INSERT INTO projects VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+      )
+      .run(value.id, JSON.stringify(value));
+  }
+  conversations() {
+    return this.db
+      .prepare("SELECT payload FROM conversations ORDER BY rowid DESC")
+      .all()
+      .map((r) => JSON.parse(r.payload));
+  }
+  conversation(id) {
+    const row = this.db
+      .prepare("SELECT payload FROM conversations WHERE id=?")
+      .get(id);
+    if (!row) throw new Error("对话不存在");
+    return JSON.parse(row.payload);
+  }
+  saveConversation(value) {
+    this.db
+      .prepare(
+        "INSERT INTO conversations VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+      )
+      .run(value.id, value.projectId, JSON.stringify(value));
+  }
+  conversationMessages(id) {
+    return this.db
+      .prepare(
+        "SELECT payload FROM conversation_messages WHERE conversation_id=? ORDER BY rowid",
+      )
+      .all(id)
+      .map((r) => JSON.parse(r.payload));
+  }
+  appendConversationMessage(value) {
+    this.db
+      .prepare("INSERT OR IGNORE INTO conversation_messages VALUES (?,?,?)")
+      .run(value.id, value.conversationId, JSON.stringify(value));
   }
   rollbackWorkflow(id, taskIds) {
     this.db.transaction(() => {

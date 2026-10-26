@@ -67,17 +67,16 @@ test(
         },
       });
       const page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       await page.getByRole("button", { name: /Agent 连接/ }).click();
       await page.getByRole("button", { name: "添加连接" }).click();
       await page.getByLabel("连接名称").fill("HTTP 测试执行器");
       await page.getByLabel("A2A 接口地址").fill(endpoint);
       await page.getByLabel("访问 Token").fill(token);
       await page.getByRole("button", { name: "保存连接" }).click();
-      const card = page
-        .locator(".agent-card")
-        .filter({
-          has: page.getByRole("heading", { name: "HTTP 测试执行器" }),
-        });
+      const card = page.locator(".agent-card").filter({
+        has: page.getByRole("heading", { name: "HTTP 测试执行器" }),
+      });
       await card.getByRole("button", { name: "测试连接" }).click();
       await card.getByText("连接可用", { exact: true }).waitFor();
       await page.getByRole("button", { name: /任务工作台/ }).click();

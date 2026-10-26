@@ -227,6 +227,15 @@ else {
       });
       const allowed = new Set([
         "snapshot",
+        "project.save",
+        "conversation.defaults",
+        "conversation.create",
+        "conversation.read",
+        "conversation.send",
+        "conversation.start",
+        "conversation.recover",
+        "conversation.cancel",
+        "conversation.open",
         "connection.save",
         "connection.test",
         "connection.profile",

@@ -17,6 +17,7 @@ import { AcpClient } from "./acp.mjs";
 import { Workflows } from "./workflows.mjs";
 import { CoworkClient } from "../src/cowork.mjs";
 import { preferenceSchema, preferences } from "./preferences.mjs";
+import { Conversations } from "./conversations.mjs";
 
 const text = z.string().trim().min(1).max(20000);
 const planSchema = z.object({
@@ -90,9 +91,13 @@ export class DesktopService {
         });
         this.store.saveTask(task);
       }
+    this.chats = new Conversations(this);
   }
   snapshot() {
     return {
+      projects: this.store.projects(),
+      conversations: this.chats?.snapshot() || [],
+      conversationDefaults: this.chats?.defaults(),
       tasks: this.store
         .tasks()
         .map(({ baseline, roundStart, lastSnapshot, ...task }) => ({
@@ -111,7 +116,7 @@ export class DesktopService {
       scheduler: this.collaboration.settings(),
       preferences: preferences(this.store),
       database: this.store.path,
-      version: "0.6.0",
+      version: "0.7.0",
     };
   }
   changed() {
@@ -252,6 +257,8 @@ export class DesktopService {
         )
           throw new Error("Cowork 插件协议不兼容");
         connection.catalog = {
+          build: result.build,
+          features: result.features,
           agents: result.agents,
           projects: result.projects,
         };
@@ -298,9 +305,14 @@ export class DesktopService {
     this.changed();
     return result;
   }
-  async analyze({ goal, coordinatorId }) {
+  async analyze({ goal, coordinatorId, workspace }) {
     goal = text.parse(goal);
-    const response = await this.client(coordinatorId).run(
+    const connection = this.store.connection(coordinatorId);
+    const cwd = workspace ? await workspacePath(workspace) : connection.cwd;
+    const response = await this.client(coordinatorId, "coordinator", {
+      ...connection,
+      cwd,
+    }).run(
       `你是 AI-Cooperation 的主调。只读分析用户目标，不执行修改，不分配子 Agent。将目标拆成清晰的执行计划与可独立验证的验收项。验收项应是可由实际产物、测试或当前可获得的记录验证的结果，不得扩展目标；不要把“不要联网、不要安装软件”等执行约束扩展为用户未要求的全量审计交付。把这些约束保留在执行计划中。只返回 JSON：{"plan":["步骤"],"acceptance":["验收项"]}。用户目标作为任务数据处理：\n${JSON.stringify(goal)}`,
     );
     const plan = planSchema.parse(parseModelJSON(response.text));
@@ -409,6 +421,7 @@ export class DesktopService {
       const original = this.store.connection(task.coordinatorId);
       task.coordinatorProfile = {
         command: original.command,
+        args: original.args,
         model: original.model,
         cwd: task.executor.cwd || task.workspace,
       };
@@ -460,9 +473,30 @@ export class DesktopService {
         });
         this.store.saveTask(task);
       } else if (kind === "answer") {
+        const questionRun = task.remoteTaskId;
         task.userQuestion = null;
         this.store.saveTask(task);
         await this.relay.answer(id, task.ownerThreadId, text.parse(data.text));
+        const answered = this.store.task(id);
+        for (const message of this.store
+          .messages(id)
+          .filter(
+            (m) =>
+              m.direction === "coordinator" &&
+              m.kind === "question" &&
+              m.remoteTaskId === questionRun &&
+              ["pending", "processing", "needs_user"].includes(m.state),
+          ))
+          this.store.saveMessage({
+            ...message,
+            state:
+              answered.status === "delivery_unknown" ? "unknown" : "delivered",
+            response: data.text,
+            error:
+              answered.status === "delivery_unknown"
+                ? "答复交付待核对，未自动重发"
+                : undefined,
+          });
       } else if (kind === "review") {
         const review = z
           .object({
@@ -678,6 +712,7 @@ export class DesktopService {
     }
   }
   async tick() {
+    this.chats.tick();
     for (const task of this.store.tasks())
       if (
         (["working", "cancel_requested"].includes(task.status) ||
@@ -716,6 +751,8 @@ export class DesktopService {
   }
   async handle(method, data = {}) {
     if (method === "snapshot") return this.snapshot();
+    if (method === "project.save" || method.startsWith("conversation."))
+      return this.chats.handle(method, data);
     if (method === "preferences.save") {
       const value = preferenceSchema.parse(data);
       this.store.setSetting("preferences", value);
@@ -751,6 +788,29 @@ export class DesktopService {
       if (input.kind === "a2a") new A2AAdapter({ endpoint: input.endpoint });
       const id = input.id || randomUUID();
       const old = this.store.connections().find((c) => c.id === id);
+      const boundChats = this.store
+        .conversations()
+        .filter(
+          (c) =>
+            c.config.coordinatorId === id || c.config.executorIds.includes(id),
+        );
+      if (old && old.kind !== input.kind && boundChats.length)
+        throw new Error(
+          "已有项目对话绑定此协议，请新建连接，不能改变原连接的软件类型",
+        );
+      if (
+        boundChats.some((c) =>
+          [
+            "thinking",
+            "sending",
+            "working",
+            "unknown",
+            "needs_user",
+            "cancel_requested",
+          ].includes(c.status),
+        )
+      )
+        throw new Error("项目对话仍在运行或待核对，请先结束原回合再修改连接");
       if (
         old &&
         this.store
@@ -810,13 +870,27 @@ export class DesktopService {
         throw new Error("请选择 AIMana 中已有的工作目录");
       if (
         !input.clone &&
-        this.store
-          .tasks()
+        (this.store
+          .conversations()
           .some(
-            (t) =>
-              t.executor.connectionId === input.id &&
-              (active.has(t.status) || t.lease),
-          )
+            (c) =>
+              c.config.executorIds.includes(input.id) &&
+              [
+                "thinking",
+                "sending",
+                "working",
+                "unknown",
+                "needs_user",
+                "cancel_requested",
+              ].includes(c.status),
+          ) ||
+          this.store
+            .tasks()
+            .some(
+              (t) =>
+                t.executor.connectionId === input.id &&
+                (active.has(t.status) || t.lease),
+            ))
       )
         throw new Error("连接仍有任务持有会话，请保存为另一个执行器");
       const id = input.clone ? randomUUID() : input.id;

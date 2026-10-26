@@ -133,7 +133,12 @@ export async function startBridge(
             name: existing?.name || "本机 AIMana Cowork",
             endpoint: data.endpoint,
             tokenRef,
-            catalog: { agents: catalog.agents, projects: catalog.projects },
+            catalog: {
+              build: catalog.build,
+              features: catalog.features,
+              agents: catalog.agents,
+              projects: catalog.projects,
+            },
             status: "connected",
             lastMessage: "插件已连接，请选择 Agent、模型和工作目录",
           });

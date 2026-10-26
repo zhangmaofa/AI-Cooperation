@@ -1,4 +1,4 @@
-const BUILD = "0.5.0";
+const BUILD = "0.7.0";
 let cleanup;
 const terminal = new Set(["completed", "input-required", "failed", "canceled"]);
 function textOf(message) {
@@ -72,6 +72,7 @@ module.exports = {
       return {
         protocol: "aico-cowork/1",
         build: BUILD,
+        features: { directChat: true },
         agents: agents
           .filter((a) => models[a.engine]?.length)
           .map((a) => ({
@@ -238,7 +239,9 @@ module.exports = {
           {
             conversationId: run.conversationId,
             turnId: run.turnId,
-            prompt,
+            prompt: run.directChat
+              ? `你正在与用户直接对话，由你理解需求、设计方案、在指定项目目录内执行并验证。不要虚构主调或等待其他 Agent 验收。有疑问直接向用户提问，遵守当前权限。最终返回 JSON：{"status":"completed 或 needs_input","summary":"给用户的答复与真实结果","question":"需要用户补充时填写"}。用户消息：\n${data.text}`
+              : prompt,
             displayPrompt: data.text,
             projectCwd: run.profile.cwd,
             projectName: run.profile.cwd,

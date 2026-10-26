@@ -140,16 +140,25 @@ export class Collaboration {
     const running = peers.filter(
       (t) => t.dispatching || ["sending", "working"].includes(t.status),
     );
-    if (running.length + this.reservations.size >= settings.maxConcurrent)
+    const chats = this.s.chats?.leases() || [];
+    if (
+      running.length + chats.length + this.reservations.size >=
+      settings.maxConcurrent
+    )
       reason = "等待全局执行名额";
     if (
       task.executor.connectionId &&
       running.filter(
         (t) => t.executor.connectionId === task.executor.connectionId,
-      ).length >= settings.perConnection
+      ).length +
+        chats.filter((c) => c.connectionId === task.executor.connectionId)
+          .length >=
+        settings.perConnection
     )
       reason = "等待执行 Agent 空闲";
     let workspace = task.executor.cwd || task.workspace;
+    if (chats.some((c) => overlaps(c.workspace, workspace)))
+      reason = "等待单 Agent 对话释放项目工作区（含待核对回合）";
     const owners = peers.filter(
       (t) =>
         t.lease &&

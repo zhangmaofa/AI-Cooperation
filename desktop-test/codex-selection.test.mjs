@@ -22,6 +22,7 @@ test(
     });
     try {
       const page = await app.firstWindow();
+      await page.getByRole("button", { name: /任务工作台/ }).click();
       await page.getByRole("button", { name: "新建协作任务" }).click();
       await page
         .getByRole("button", { name: "真实 Agent", exact: true })

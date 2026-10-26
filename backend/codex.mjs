@@ -15,7 +15,7 @@ export class CodexClient {
     this.starting = (async () => {
       this.child = this.spawn(
         this.connection.command || "codex.exe",
-        ["app-server", "--listen", "stdio://"],
+        [...(this.connection.args || []), "app-server", "--listen", "stdio://"],
         { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
       );
       const child = this.child;
@@ -43,7 +43,7 @@ export class CodexClient {
         clientInfo: {
           name: "ai_cooperation",
           title: "AI-Cooperation",
-          version: "0.5.0",
+          version: "0.7.0",
         },
       });
       this.send({ method: "initialized", params: {} });
@@ -136,13 +136,13 @@ export class CodexClient {
       })),
     };
   }
-  async openThread(threadId) {
+  async openThread(threadId, connection = this.connection) {
     await this.start();
     const params = {
       sandbox: this.role === "executor" ? "workspace-write" : "read-only",
       approvalPolicy: "never",
-      ...(this.connection.model ? { model: this.connection.model } : {}),
-      ...(this.connection.cwd ? { cwd: this.connection.cwd } : {}),
+      ...(connection.model ? { model: connection.model } : {}),
+      ...(connection.cwd ? { cwd: connection.cwd } : {}),
     };
     if (threadId)
       await this.request("thread/resume", {
@@ -153,10 +153,11 @@ export class CodexClient {
     else threadId = (await this.request("thread/start", params)).thread.id;
     return threadId;
   }
-  run(...args) {
+  run(prompt, threadId, options = {}) {
     // One controller never starts competing decisions, even across child tasks.
+    const profile = { ...this.connection };
     const result = (this.queue || Promise.resolve()).then(() =>
-      this.runTurn(...args),
+      this.runTurn(prompt, threadId, { ...options, profile }),
     );
     this.queue = result.catch(() => {});
     return result;
@@ -168,13 +169,14 @@ export class CodexClient {
       onStarted,
       onProgress,
       threadPrepared = false,
+      profile = this.connection,
       timeoutMs = this.role === "executor" ? 900000 : 180000,
     } = {},
   ) {
     if (threadPrepared) {
       await this.start();
       if (!threadId) throw new Error("缺少已打开的 Codex 会话");
-    } else threadId = await this.openThread(threadId);
+    } else threadId = await this.openThread(threadId, profile);
     if (this.turns.has(threadId))
       throw new Error("该 Codex 会话正在工作，请等待本回合结束");
     const result = new Promise((resolve, reject) => {
