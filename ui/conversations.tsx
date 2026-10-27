@@ -8,6 +8,7 @@ import type {
   ExecutionProgress,
 } from "./types";
 import { clearDraft, useDraftState } from "./drafts";
+import { MarkdownMessage, type MessageScope } from "./markdown";
 type Call = <T>(method: string, data?: unknown) => Promise<T | undefined>;
 const emptyConfig: AgentConfiguration = {
   mode: "single",
@@ -36,9 +37,11 @@ const states: Record<string, string> = {
 function RunProgress({
   value,
   showText,
+  scope,
 }: {
   value: ExecutionProgress;
   showText: boolean;
+  scope?: MessageScope;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -68,13 +71,13 @@ function RunProgress({
       {value.publicMessage && (
         <div className="run-public-message">
           <span className="hint">Agent 的阶段性进度</span>
-          <p>{value.publicMessage}</p>
+          <MarkdownMessage text={value.publicMessage} scope={scope} />
         </div>
       )}
       {showText && value.partialText && (
         <div className="run-stream">
           <span className="hint">正在返回的回复 · 本轮尚未确认结束</span>
-          <p>{value.partialText}</p>
+          <MarkdownMessage text={value.partialText} scope={scope} />
         </div>
       )}
       {value.warning && <p className="warning">{value.warning}</p>}
@@ -278,13 +281,42 @@ export function ProjectNavigation({
   chatId,
   open,
   create,
+  call,
 }: {
   state: Snapshot;
   projectId: string;
   chatId: string;
   open: (projectId: string, chatId?: string) => void;
   create: () => void;
+  call: Call;
 }) {
+  const [removed, setRemoved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function mutate(method: string, id: string) {
+    setBusy(true);
+    try {
+      await call(method, { id });
+    } finally {
+      setBusy(false);
+    }
+  }
+  function menu(kind: "project" | "conversation", id: string, title: string) {
+    return (
+      <details className="project-item-menu">
+        <summary aria-label={`${title}的操作`} title="更多操作">
+          ⋯
+        </summary>
+        <div>
+          <button
+            disabled={busy}
+            onClick={() => void mutate(`${kind}.remove`, id)}
+          >
+            移除{kind === "project" ? "项目" : "对话"}
+          </button>
+        </div>
+      </details>
+    );
+  }
   return (
     <section className="project-navigation" aria-label="项目与历史对话">
       <div className="project-nav-heading">
@@ -298,37 +330,85 @@ export function ProjectNavigation({
       )}
       {state.projects?.map((project) => (
         <div className="project-nav-group" key={project.id}>
-          <button
-            className={`project-nav-title ${projectId === project.id && !chatId ? "selected" : ""}`}
-            onClick={() => open(project.id)}
-          >
-            <span aria-hidden="true">▱</span>
-            <span>{project.name}</span>
-          </button>
+          <div className="project-item-row">
+            <button
+              className={`project-nav-title ${projectId === project.id && !chatId ? "selected" : ""}`}
+              onClick={() => open(project.id)}
+            >
+              <span aria-hidden="true">▱</span>
+              <span>{project.name}</span>
+            </button>
+            {menu("project", project.id, project.name)}
+          </div>
           <button className="new-project-chat" onClick={() => open(project.id)}>
             ＋ 在此项目新建对话
           </button>
           {(state.conversations || [])
             .filter((c) => c.projectId === project.id)
             .map((chat) => (
-              <button
-                key={chat.id}
-                className={`project-chat-link ${chatId === chat.id ? "selected" : ""}`}
-                onClick={() => open(project.id, chat.id)}
-                title={chat.title}
-              >
-                <i
-                  className={
-                    chat.status === "working" || chat.status === "thinking"
-                      ? "dot"
-                      : "chat-idle-dot"
-                  }
-                />
-                <span>{chat.title}</span>
-              </button>
+              <div className="project-item-row" key={chat.id}>
+                <button
+                  className={`project-chat-link ${chatId === chat.id ? "selected" : ""}`}
+                  onClick={() => open(project.id, chat.id)}
+                  title={chat.title}
+                >
+                  <i
+                    className={
+                      chat.status === "working" || chat.status === "thinking"
+                        ? "dot"
+                        : "chat-idle-dot"
+                    }
+                  />
+                  <span>{chat.title}</span>
+                </button>
+                {menu("conversation", chat.id, chat.title)}
+              </div>
             ))}
         </div>
       ))}
+      <button
+        className="new-project-chat"
+        aria-expanded={removed}
+        onClick={() => setRemoved(!removed)}
+      >
+        已移除（
+        {(state.archivedProjects?.length || 0) +
+          (state.archivedConversations?.length || 0)}
+        ）
+      </button>
+      {removed && (
+        <section className="removed-items" aria-label="已移除的项目和对话">
+          <p className="hint">
+            可随时恢复；项目文件与原软件中的会话保留。移除项目会收起其中的对话。
+          </p>
+          {state.archivedProjects?.map((p) => (
+            <div key={p.id}>
+              <span title={p.cwd}>项目 · {p.name}</span>
+              <button
+                disabled={busy}
+                onClick={() => void mutate("project.restore", p.id)}
+              >
+                恢复
+              </button>
+            </div>
+          ))}
+          {state.archivedConversations?.map((c) => (
+            <div key={c.id}>
+              <span title={c.title}>对话 · {c.title}</span>
+              <button
+                disabled={busy}
+                onClick={() => void mutate("conversation.restore", c.id)}
+              >
+                恢复
+              </button>
+            </div>
+          ))}
+          {!state.archivedProjects?.length &&
+            !state.archivedConversations?.length && (
+              <p className="hint">暂无已移除的项目或对话</p>
+            )}
+        </section>
+      )}
     </section>
   );
 }
@@ -653,7 +733,17 @@ export function ProjectConversation({
                 })}
               </time>
             </div>
-            <div className="message-text">{message.text}</div>
+            <div className="message-text">
+              {message.role === "assistant" ? (
+                <MarkdownMessage
+                  text={message.text}
+                  scope={{ conversationId: chatId }}
+                  copy
+                />
+              ) : (
+                message.text
+              )}
+            </div>
           </article>
         ))}
         {detail?.plan && !detail.workflowId && (
@@ -755,7 +845,15 @@ export function ProjectConversation({
                   </span>
                 </summary>
                 <p>{task.queueReason || task.automationError}</p>
-                <pre>{task.result?.text || "尚未返回交付"}</pre>
+                {task.result?.text ? (
+                  <MarkdownMessage
+                    text={task.result.text}
+                    scope={{ taskId: task.id }}
+                    copy
+                  />
+                ) : (
+                  <p className="hint">尚未返回交付</p>
+                )}
                 <button className="secondary" onClick={() => openTask(task.id)}>
                   查看任务、会话与验证详情
                 </button>
@@ -809,6 +907,7 @@ export function ProjectConversation({
             <RunProgress
               value={detail.progress}
               showText={activeConfig.mode === "single"}
+              scope={{ conversationId: chatId }}
             />
           )}
         {detail &&

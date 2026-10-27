@@ -96,6 +96,8 @@ export interface Connection {
 }
 export interface Snapshot {
   projects?: Project[];
+  archivedProjects?: Project[];
+  archivedConversations?: Conversation[];
   conversations?: Conversation[];
   conversationDefaults?: AgentConfiguration;
   preferences?: import("./preferences").Preferences;

@@ -27,6 +27,8 @@ import {
 import "./theme.css";
 import "./style.css";
 import "./conversations.css";
+import "./markdown.css";
+import { MarkdownMessage } from "./markdown";
 import { useDraftState, clearDraft } from "./drafts";
 import {
   AppearanceSettings,
@@ -179,7 +181,7 @@ function App() {
     tasks: [],
     connections: [],
     database: "",
-    version: "0.7.1",
+    version: "0.7.2",
   });
   const [page, setPage] = useState("chats");
   const [projectId, setProjectId] = useState(() => {
@@ -306,6 +308,19 @@ function App() {
   const current = state.tasks.find((t) => t.id === selected);
   const activeProject =
     state.projects?.find((p) => p.id === projectId) || state.projects?.[0];
+  useEffect(() => {
+    if (!state.projects || !state.conversations) return;
+    if (projectId && !state.projects.some((p) => p.id === projectId)) {
+      setProjectId(state.projects[0]?.id || "");
+      setChatId("");
+    } else if (
+      chatId &&
+      !state.conversations.some(
+        (c) => c.id === chatId && c.projectId === activeProject?.id,
+      )
+    )
+      setChatId("");
+  }, [state.projects, state.conversations, projectId, chatId]);
   const actionable = state.tasks.filter((t) =>
     [
       "needs_input",
@@ -387,6 +402,7 @@ function App() {
           </button>
         </nav>
         <ProjectNavigation
+          call={call}
           state={state}
           projectId={activeProject?.id || ""}
           chatId={page === "chats" ? chatId : ""}
@@ -1053,11 +1069,15 @@ function TaskDetail({
                       : "执行器回报"}
                   </h3>
                 </div>
-                <pre
+                <div
                   className={`report ${task.status === "needs_input" ? "question" : ""}`}
                 >
-                  {task.result.text}
-                </pre>
+                  <MarkdownMessage
+                    text={task.result.text}
+                    scope={{ taskId: task.id }}
+                    copy
+                  />
+                </div>
               </>
             )}
             {task.status === "needs_input" && (

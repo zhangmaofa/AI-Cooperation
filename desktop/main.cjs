@@ -9,6 +9,7 @@ const {
   shell,
   Notification,
   nativeTheme,
+  clipboard,
 } = require("electron");
 const { fork } = require("node:child_process");
 const fs = require("node:fs");
@@ -16,6 +17,11 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { installConnector } = require("./connector.cjs");
 const { notices } = require("./notifications.cjs");
+const {
+  classifyLink,
+  previewFile,
+  resolveFile,
+} = require("./content-links.cjs");
 const {
   conversationTarget,
   taskTarget,
@@ -249,9 +255,17 @@ else {
       });
       const allowed = new Set([
         "snapshot",
+        "content.preview",
+        "content.external",
+        "content.reveal",
+        "content.copy",
         "desktop.open-conversation",
         "desktop.open-task",
         "project.save",
+        "project.remove",
+        "project.restore",
+        "conversation.remove",
+        "conversation.restore",
         "conversation.defaults",
         "conversation.create",
         "conversation.read",
@@ -285,6 +299,24 @@ else {
         async (event, method, data = {}) => {
           if (event.sender !== window?.webContents || !allowed.has(method))
             throw new Error("不支持的操作");
+          if (method === "content.preview") return previewFile(latest, data);
+          if (method === "content.reveal") {
+            const file = await resolveFile(latest, data);
+            shell.showItemInFolder(file.path);
+            return { shown: true };
+          }
+          if (method === "content.external") {
+            const link = classifyLink(data.href);
+            if (link.kind !== "external") throw new Error("只支持网页外部链接");
+            await shell.openExternal(link.url);
+            return { launched: true };
+          }
+          if (method === "content.copy") {
+            if (typeof data.text !== "string" || data.text.length > 524288)
+              throw new Error("复制内容过长或格式不正确");
+            clipboard.writeText(data.text);
+            return { copied: true };
+          }
           if (
             method === "desktop.open-conversation" ||
             method === "desktop.open-task"

@@ -163,7 +163,7 @@ UI 连接只接收脱敏元数据与用户需要的产物。token 通过凭据�
 
 ## 10. 当前证据与未完成部分
 
-项目独立源码位于 `E:\AI-Cooperation`，远端为 `https://github.com/zhangmaofa/AI-Cooperation`。当前为 0.7.1 桌面预览版：Electron 主进程与独立 Node 后台通过 IPC 通信，React/TypeScript/Vite 提供界面，SQLite WAL 保存项目、对话、任务、计划、消息及偏好设置。项目绑定本地目录，可按对话选择单 Agent 或多 Agent 协作；原生会话、模式与角色配置在对话内保留。主调规划、子任务审核和总体审核统一使用项目目录。直接聊天与协作任务共用并发和写入锁。已实现依赖调度、暂停新工作、独立验证、主控答疑和总体审核；JSON 原型保留兼容入口。跨应用 MCP 和配对使用经过鉴权的本机 HTTP 通道。
+项目独立源码位于 `E:\AI-Cooperation`，远端为 `https://github.com/zhangmaofa/AI-Cooperation`。当前为 0.7.2 桌面预览版：Electron 主进程与独立 Node 后台通过 IPC 通信，React/TypeScript/Vite 提供界面，SQLite WAL 保存项目、对话、任务、计划、消息及偏好设置。项目绑定本地目录，可按对话选择单 Agent 或多 Agent 协作；原生会话、模式与角色配置在对话内保留。主调规划、子任务审核和总体审核统一使用项目目录。直接聊天与协作任务共用并发和写入锁。已实现依赖调度、暂停新工作、独立验证、主控答疑和总体审核；JSON 原型保留兼容入口。跨应用 MCP 和配对使用经过鉴权的本机 HTTP 通道。
 
 当前回归覆盖 61 项内核/协议测试与 11 项桌面测试（含打包程序启动），覆盖项目保存、多轮原生会话、双执行器集成、工作目录隔离、公开进度流与原回合只读核对，以及在 Codex 桌面查看原生记录。打开桌面原会话复用官方协议链接，不能视为桌面输入与协调器的双向接管。AIMana 普通 Cowork 桥与直接对话模式在隔离的已安装框架运行时中通过测试，真实用户账号配对和模型执行仍待联调；不能以协议 fixture 替代真实闭环。当前主调能力限于 Codex；十实例真实负载、已有桌面聊天的双向接管与空闲自动唤醒仍未验证或实现。
 
@@ -174,3 +174,10 @@ UI 连接只接收脱敏元数据与用户需要的产物。token 通过凭据�
 - [Electron 进程模型](https://www.electronjs.org/docs/latest/tutorial/process-model)
 - [SQLite WAL](https://www.sqlite.org/wal.html)
 - [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
+
+
+### 共享消息显示与可恢复移除（0.7.2）
+
+`ui/markdown.tsx` 统一渲染 Agent 的 Markdown/GFM 文本。每个软件的接入层继续处理协议、会话和事件归一化，不为常规文本另建 UI。IPC 负责受控打开网页、复制文本以及按对话/任务工作目录检查本地文件链接；文件预览只读，并限制单次读取为 1 MiB。原软件的专有交互继续使用其原生界面。
+
+项目和对话通过 SQLite JSON payload 中的 `archivedAt` 实现可恢复移除，不改动项目目录、原生会话或历史消息。常规快照过滤已移除项目及其对话，另返回可恢复列表；恢复项目不恢复此前单独移除的对话。移除前检查回合状态、后台忙状态、协作运行状态和执行任务状态，防止隐藏仍需用户处理的工作。接口拒绝对已移除记录继续发消息，恢复后沿用原会话。

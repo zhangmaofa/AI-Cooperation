@@ -431,3 +431,67 @@ footer[hidden] {
     flex-wrap: wrap;
   }
 }
+.project-item-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  min-width: 0;
+}
+.project-item-row > button {
+  flex: 1;
+  min-width: 0;
+}
+.project-item-menu {
+  flex-shrink: 0;
+}
+.project-item-menu summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  padding: 6px;
+  border-radius: 5px;
+  font-size: 17px;
+}
+.project-item-menu summary:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+.project-item-menu > div {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 4px 14px #0003;
+  padding: 5px;
+}
+.project-item-menu button {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: transparent;
+  padding: 8px 12px;
+}
+.removed-items {
+  padding: 5px 8px;
+}
+.removed-items > div {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+  font-size: calc(10px * var(--font-scale));
+}
+.removed-items > div > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.removed-items button {
+  padding: 5px;
+  background: var(--subtle);
+  color: var(--text-secondary);
+}

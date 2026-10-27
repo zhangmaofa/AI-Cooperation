@@ -58,6 +58,7 @@ export class Conversations {
   project(id) {
     const value = this.s.store.projects().find((p) => p.id === id);
     if (!value) throw new Error("项目不存在");
+    if (value.archivedAt) throw new Error("项目已移除，请先在已移除列表中恢复");
     return value;
   }
   config(value, complete = false) {
@@ -111,7 +112,12 @@ export class Conversations {
           p.id !== old?.id &&
           path.resolve(p.cwd).toLowerCase() === cwd.toLowerCase(),
       );
-    if (duplicate) throw new Error(`这个目录已属于项目“${duplicate.name}”`);
+    if (duplicate)
+      throw new Error(
+        duplicate.archivedAt
+          ? `这个目录的项目“${duplicate.name}”已移除，请从已移除列表恢复`
+          : `这个目录已属于项目“${duplicate.name}”`,
+      );
     const project = {
       ...old,
       id: old?.id || randomUUID(),
@@ -190,6 +196,60 @@ export class Conversations {
   read(id) {
     const chat = this.s.store.conversation(id);
     return { ...chat, messages: this.s.store.conversationMessages(id) };
+  }
+  removalCheck(chat) {
+    if (
+      this.busy.has(chat.id) ||
+      ["thinking", "queued", ...active].includes(chat.status)
+    )
+      throw new Error(
+        `对话“${chat.title}”仍在执行或待核对，请先停止并核对原回合后再移除`,
+      );
+    for (const workflow of this.s.store
+      .workflows()
+      .filter((w) => chat.workflowIds.includes(w.id))) {
+      const running = workflow.taskIds.some((id) =>
+        [
+          "sending",
+          "working",
+          "cancel_requested",
+          "delivery_unknown",
+          "needs_user",
+        ].includes(this.s.store.task(id).status),
+      );
+      if (
+        running ||
+        workflow.status === "reviewing" ||
+        this.s.workflows.busy.has(workflow.id) ||
+        (!workflow.paused &&
+          !["accepted", "budget_exhausted"].includes(workflow.status))
+      )
+        throw new Error(
+          `对话“${chat.title}”的协作尚未结束，请先暂停协作并等待执行回合结束后再移除`,
+        );
+    }
+  }
+  archive(kind, id, restore = false) {
+    if (kind === "project") {
+      const project = this.s.store.projects().find((p) => p.id === id);
+      if (!project) throw new Error("项目不存在");
+      if (!restore)
+        for (const chat of this.s.store
+          .conversations()
+          .filter((c) => c.projectId === id && !c.archivedAt))
+          this.removalCheck(chat);
+      project.archivedAt = restore ? undefined : project.archivedAt || stamp();
+      project.updatedAt = stamp();
+      this.s.store.saveProject(project);
+    } else {
+      const chat = this.s.store.conversation(id);
+      this.project(chat.projectId);
+      if (!restore) this.removalCheck(chat);
+      chat.archivedAt = restore ? undefined : chat.archivedAt || stamp();
+      this.save(chat);
+    }
+    this.s.changed();
+    return { restored: restore, removed: !restore };
   }
   leases() {
     return this.s.store
@@ -806,13 +866,33 @@ export class Conversations {
     }
     return updated;
   }
-  snapshot() {
+  snapshot(archived = false) {
+    const projects = new Set(
+      this.s.store
+        .projects()
+        .filter((p) => !p.archivedAt)
+        .map((p) => p.id),
+    );
     return this.s.store
       .conversations()
+      .filter((c) => projects.has(c.projectId) && !!c.archivedAt === archived)
       .map(({ pending, plan, executors, coordinatorProfile, ...chat }) => chat);
   }
   async handle(method, data) {
     if (method === "project.save") return this.saveProject(data);
+    if (
+      [
+        "project.remove",
+        "project.restore",
+        "conversation.remove",
+        "conversation.restore",
+      ].includes(method)
+    )
+      return this.archive(
+        method.split(".")[0],
+        z.string().uuid().parse(data.id),
+        method.endsWith("restore"),
+      );
     if (method === "conversation.defaults") {
       const config = this.config(data);
       this.s.store.setSetting("conversationDefaults", config);
@@ -821,6 +901,9 @@ export class Conversations {
     }
     if (method === "conversation.create") return this.create(data);
     const id = z.string().uuid().parse(data.id);
+    const chat = this.s.store.conversation(id);
+    this.project(chat.projectId);
+    if (chat.archivedAt) throw new Error("对话已移除，请先在已移除列表中恢复");
     if (method === "conversation.read") return this.read(id);
     if (method === "conversation.send") return this.send(data);
     if (method === "conversation.start") return this.start(id);

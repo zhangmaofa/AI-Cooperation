@@ -95,7 +95,9 @@ export class DesktopService {
   }
   snapshot() {
     return {
-      projects: this.store.projects(),
+      projects: this.store.projects().filter((p) => !p.archivedAt),
+      archivedProjects: this.store.projects().filter((p) => p.archivedAt),
+      archivedConversations: this.chats?.snapshot(true) || [],
       conversations: this.chats?.snapshot() || [],
       conversationDefaults: this.chats?.defaults(),
       tasks: this.store
@@ -116,7 +118,7 @@ export class DesktopService {
       scheduler: this.collaboration.settings(),
       preferences: preferences(this.store),
       database: this.store.path,
-      version: "0.7.1",
+      version: "0.7.2",
     };
   }
   changed() {
@@ -753,7 +755,7 @@ export class DesktopService {
   }
   async handle(method, data = {}) {
     if (method === "snapshot") return this.snapshot();
-    if (method === "project.save" || method.startsWith("conversation."))
+    if (method.startsWith("project.") || method.startsWith("conversation."))
       return this.chats.handle(method, data);
     if (method === "preferences.save") {
       const value = preferenceSchema.parse(data);
